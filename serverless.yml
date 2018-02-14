@@ -66,10 +66,12 @@ custom:
 functions:
   hello:
     handler: handler.hello
-    timeout: 30
+    environment: # Function level environment variables
+      DEBUG: FALSE
+    timeout: 120
     events:
       - schedule:
-          rate: rate(10 minutes)
+          rate: cron(*/10 * * * ? *)
       - enabled: true    
   check_teams:
     handler: handler.check_teams

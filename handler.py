@@ -1,17 +1,20 @@
 import json
-#import requests
+import re
 import boto3
 from aiohttp import ClientSession
 import itertools
 import asyncio 
+#import requests
+import os
 from pprint import pprint
-#from IPython import embed
-#import AdvancedHTMLParser
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
 activity_url_template = "https://amara.org/en/teams/{}/activity/"
-DEBUG = False
+DEBUG = ''
+WEBHOOKS_URL = ''
+LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
+POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
 DB = boto3.resource("dynamodb")
 response = ''
 
@@ -24,8 +27,11 @@ component_mapping = {
     'minute': timedelta(minutes=1)
 }
 
-TIME_THRESHOLD = -60 * 30 # time cutoff for interesting events in seconds (30 minutes)
-ALERT_TERMS = ['added a video', 'unassigned'] # What terms should trigger an alert
+TIME_THRESHOLD = -60 * 10 # time cutoff for interesting events in seconds (10 minutes)
+#ALERT_TERMS = ['added a video', 'unassigned'] # What terms should trigger an alert
+ALERT_TERMS = ['added a video', 'unassigned', r"endorsed.*(transcriber)"] # What terms should trigger an alert
+ALERT_STRING = "|".join(ALERT_TERMS)
+ALERT_REGEX = re.compile(ALERT_STRING)
 
 def get_user():
     user = DB.Table("user")
@@ -45,28 +51,27 @@ def timestring_to_minutes_delta(string):
     return delta
     
 async def auth_session_and_fetch_teams(session):
-    username = '';
-    password = '';
-    if (DEBUG == False):
-        login = get_user()
-        username = login['user']
-        password = login['pass']
-     
-    url = "https://amara.org/en/auth/login/?next=/"
+    login = get_user()
+    username = login['user']
+    password = login['pass']
     
     teams = []
     
-    async with session.get(url) as response:
+    async with session.get(LOGIN_URL) as response:
         await response.read()
         crsf = response.cookies.get('csrftoken').value
 
     #response = session.get(url)    
     #crsf = response.cookies.get('csrftoken')
 
-    auth = {'csrfmiddlewaretoken':crsf, 'username': username,'password': password}
-    ref = {'referer':'https://amara.org/en/auth/login/?next=/'}
+    auth = {
+        'csrfmiddlewaretoken' : crsf, 
+        'username' : username,
+        'password' : password,
+    }
+    ref = {'referer' : LOGIN_URL}
 
-    async with session.post("https://amara.org/en/auth/login_post/", data=auth, headers=ref) as response:
+    async with session.post(POST_LOGIN_URL, data=auth, headers=ref) as response:
         
         doc = await response.text()
         #response = session.post("https://amara.org/en/auth/login_post/", data=auth, headers=ref)
@@ -187,14 +192,48 @@ def init_amara_teams(event, context):
 
     return response
         
+async def check_amara_teams():
+    async with ClientSession() as session:
+        teams = await auth_session_and_fetch_teams(session)
+        if DEBUG:
+            payload = {"team": "ondemand656", "url":"http://giraffesocialenterprises.org.uk/"}
+            async with session.post(WEBHOOKS_URL,json=payload) as response:
+                response = await response.read()
+                print("sending message: {} to url:{}\n".format(payload,WEBHOOKS_URL))
+        return teams
+
+def get_amara_init_info():
+    global ALERT_STRING
+    global ALERT_REGEX
+    global WEBHOOKS_URL
+    global DEBUG
+    
+    DEBUG = os.getenv('DEBUG', "FALSE")
+    if DEBUG == "FALSE":
+        DEBUG = False
+        print("DEBUG is false\n")
+    else:
+        ALERT_STRING = os.getenv("ALERT", ALERT_STRING)
+        ALERT_REGEX = re.compile(ALERT_STRING)
+        print("found regex: {}".format(ALERT_STRING))
+        print("DEBUG is true\n")
+        DEBUG = True
+        
+    WEBHOOKS_URL = os.getenv('URL', "https://hooks.zapier.com/hooks/catch/738949/z8ql5t/")
+    print("found webhooks url: {}".format(WEBHOOKS_URL))
 
 def check_teams(event, context):
+    get_amara_init_info()
+    
     # Create client session that will ensure we dont open new connection
     # per each request.
-    session = requests.Session()
+    loop = asyncio.get_event_loop()
+    future = asyncio.ensure_future(check_amara_teams())
+    teams = loop.run_until_complete(future)
 
-    teams = auth_session_and_fetch_teams(session)
-    result = update_teams(teams)
+    result = ''
+    if not DEBUG:
+        result = update_teams(teams)
 
     message = "Total teams to scrape: {}\n".format(len(teams))
     body = {
@@ -214,21 +253,19 @@ async def bound_fetch(sem, url, team, session):
         return await fetch_team_activities(url, team, session)
 
 async def run_task_checks():
+    get_amara_init_info()
 
-    def term_filter(a):
-        for term in ALERT_TERMS:
-            if term in a['activity']['text']:
-                return True
-        return False
-            
+    def term_filter(rx,text):
+        return rx.search(text)
+    
     tasks = []
     message = ""
-    sem = asyncio.Semaphore(1)
+    sem = asyncio.Semaphore(200)
+
 
     # Create client session that will ensure we dont open new connection
     # per each request.
     async with ClientSession() as session:
-    #session = requests.Session()
 
         teams = await auth_session_and_fetch_teams(session)
 
@@ -237,33 +274,29 @@ async def run_task_checks():
         for team in teams:
             url = activity_url_template.format(team['name'])
             task = asyncio.ensure_future(bound_fetch(sem, url, team, session))
-            #task = fetch_team_activities(url, team, session)
             tasks.append(task)
 
         # Gather all futures
-        teams_activities = asyncio.gather(*tasks)
+        team_activities = asyncio.gather(*tasks)
         
         # Flatten nested activities.    
-        activities = list(itertools.chain(*await teams_activities))
+        activities = list(itertools.chain(*await team_activities))
         
-        print("tasks: {}\n".format(teams_activities))
+        print("tasks: {}\n".format(activities))
 
         # Filter by terms
-        activities = list(filter(term_filter, activities))
+        activities = list(filter(lambda a: term_filter(ALERT_REGEX,a['activity']['text']), activities))
+
+        print("Total activities after filtering: {}\n".format(len(activities)))
 
         if len(activities) > 0:
             team_names = list(set(map(lambda a: a['team']['name'], activities)))
-            sms_message = ";".join(team_names)
-            email_message = ''
             for a in activities:
-                email_message += "Team: {}, URL: {}\n".format(a['team']['name'], a['url'])
-        
-            url = 'https://maker.ifttt.com/trigger/amara/with/key/i2KFblN2MQUjVcHBV6Un6BpWuoDjUbUsNeIjmlloq2q'
-            payload = {"value1":sms_message, "value2":email_message}
-            r = requests.post(url,json=payload)
-            print("message sent: {}, response received: {}\n".format(payload,r))
-    
-        print("Total activities after filtering: {}\n".format(len(activities)))
+                payload = {"team": a['team']['name'], "url":a['url']}
+                async with session.post(WEBHOOKS_URL,json=payload) as response:
+                    response = await response.read()
+                    print("sending message: {} to url:{}\n".format(payload,WEBHOOKS_URL))
+                
     
     
     
