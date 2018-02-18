@@ -40,7 +40,7 @@ class AmaraTask:
     ALERT_NEW_STRING = ""
     ALERT_NEW_REGEX = None
 
-    NO_REVIEW_TEAMS = ['demand060', 'ondemand616']
+    NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616']
 
     def __init__(self, team, url, delta, time, text):
         self.team = team
@@ -151,7 +151,7 @@ async def auth_session_and_fetch_teams(session):
     
     if DEBUG:
         teams.append(AmaraTeam("demand-465","/en/teams/demand-465/"))
-        teams.append(AmaraTeam("demand060","/en/teams/demand060/"))
+        teams.append(AmaraTeam("ondemand060","/en/teams/ondemand060/"))
         return teams
 
     async with session.get(LOGIN_URL) as response:
@@ -212,7 +212,7 @@ async def fetch_team_activities(url, team, session):
                         )
             else:
                  a.append(AmaraTask(team, 
-                                   "https://amara.org/en/teams/demand060/activity/",
+                                   "https://amara.org/en/teams/ondemand060/activity/",
                                    timestring_to_minutes_delta(time),
                                    time, 
                                    "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
