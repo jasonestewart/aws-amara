@@ -30,7 +30,10 @@ TIME_THRESHOLD = -60 * 10
 class AmaraTask:
     """Class for encapsulating Tasks on Amara.org"""
 
-    WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/738949/z8ql5t/"
+    # jason.e.stewart gmail account
+    # WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/738949/z8ql5t/"
+    # jason baynvc account
+    WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/2976959/zwt88b/"
 
     ALERT_REVIEW_TERMS = []  # What terms should trigger a review alert
     ALERT_REVIEW_STRING = ""
