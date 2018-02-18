@@ -67,7 +67,10 @@ functions:
   hello:
     handler: handler.hello
     environment: # Function level environment variables
-      DEBUG: FALSE
+      DEBUG: TRUE
+      ALERT_REVIEW: approved
+      ALERT_NEW: edited
+      THRESHOLD: -3600
     timeout: 120
     events:
       - schedule:
