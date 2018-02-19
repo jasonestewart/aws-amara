@@ -12,10 +12,7 @@ import cProfile
 import io
 import pstats
 
-activity_url_template = "https://amara.org/en/teams/{}/activity/"
 DEBUG = ""
-LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
-POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
 DB = boto3.resource("dynamodb")
 LOCAL = False
 PROFILE = False
@@ -31,6 +28,8 @@ class AmaraTask(object):
     # WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/738949/z8ql5t/"
     # jason baynvc account
     WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/2976959/zwt88b/"
+
+    BASE_URL = "https://amara.org"
 
     ALERT_REVIEW_TERMS = []  # What terms should trigger a review alert
     ALERT_REVIEW_STRING = ""
@@ -92,7 +91,7 @@ class AmaraTask(object):
     async def send_webhook(self, session, type):
         payload = {"team": self.team.name,
                    "url": self.url,
-                   "video_url": self.video_url,
+                   "video_url": self.BASE_URL + self.video_url,
                    "type": type}
 
         async with session.post(self.WEBHOOKS_URL, json=payload) as response:
@@ -139,12 +138,17 @@ class AmaraTask(object):
             return await self.handle_review(session)
 
 
-class AmaraTeam:
-    """Class for encapsulating Tasks on Amara.org"""
+class AmaraTeam(object):
+    """Class for encapsulating Teams on Amara.org"""
+
+    TEAM_URL_TEMPLATE = "https://amara.org/en/teams/{}/activity/"
 
     def __init__(self, name, url):
         self.name = name
         self.url = url
+
+    def make_url(self):
+        return self.TEAM_URL_TEMPLATE.format(self.name)
 
     def __repr__(self):
         return "<AmaraTeam: {}>\n".format(self)
@@ -153,16 +157,31 @@ class AmaraTeam:
         return "Name: {}\tURL: {}\n".format(self.name, self.url)
 
 
-def get_user():
-    user = DB.Table("user")
-    response = user.get_item(Key={"service_name" : "amara"})
-    return response["Item"]
+class AmaraUser(object):
+    """Class for encapsulating Amara.org login"""
+
+    LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
+    POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
+
+    __instance = None
+
+    def __new__(cls):
+        if cls.__instance is None:
+            cls.__instance = object.__new__(cls)
+            login = cls.get_user()
+            cls.__instance.name = login['user']
+            cls.__instance.password = login['pass']
+        return cls.__instance
+
+    @staticmethod
+    def get_user():
+        user = DB.Table("user")
+        response = user.get_item(Key={"service_name" : "amara"})
+        return response["Item"]
 
 
 async def auth_session_and_fetch_teams(session):
-    login = get_user()
-    username = login['user']
-    password = login['pass']
+    user = AmaraUser()
 
     teams = []
 
@@ -171,18 +190,18 @@ async def auth_session_and_fetch_teams(session):
         teams.append(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
         return teams
 
-    async with session.get(LOGIN_URL) as response:
+    async with session.get(user.LOGIN_URL) as response:
         await response.read()
         crsf = response.cookies.get('csrftoken').value
 
     auth = {
         'csrfmiddlewaretoken' : crsf,
-        'username' : username,
-        'password' : password,
+        'username' : user.name,
+        'password' : user.password,
     }
-    ref = {'referer' : LOGIN_URL}
+    ref = {'referer' : user.LOGIN_URL}
 
-    async with session.post(POST_LOGIN_URL,
+    async with session.post(user.POST_LOGIN_URL,
                             data=auth,
                             headers=ref) as response:
 
@@ -280,7 +299,7 @@ async def fetch_team_activities(url, team, session):
                              "https://amara.org/en/teams/demand-465/activity/",
                              '/en/videos/oZSRr0kN6GE2/info/etc_layla_arabic_subs_sl_170719mp4/',
                              time,
-                             "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+                             "\n2 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
             )
             team.set_delta()
             a.append(team)
@@ -289,7 +308,7 @@ async def fetch_team_activities(url, team, session):
                              "https://amara.org/en/teams/ondemand060/activity/",
                              '/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060',
                              time,
-                             "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+                             "\n2 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
             )
             team.set_delta()
             a.append(team)
@@ -394,17 +413,36 @@ async def check_amara_teams():
 
 def get_amara_init_info():
     global DEBUG
+    global LOCAL
+    global PROFILE
     global TIME_THRESHOLD
 
-    DEBUG = os.getenv('DEBUG', "FALSE")
-    if DEBUG.upper() == "FALSE":
+    debug = os.getenv('DEBUG', "FALSE")
+    if debug.upper() == "FALSE":
         DEBUG = False
         print("DEBUG is false\n")
     else:
         print("DEBUG is true\n")
         DEBUG = True
-        TIME_THRESHOLD = int(os.getenv('THRESHOLD', TIME_THRESHOLD))
-        print("Found THRESHOLD: {}\n".format(TIME_THRESHOLD))
+
+    local = os.getenv('LOCAL', "FALSE")
+    if local.upper() == "FALSE":
+        LOCAL = False
+        print("LOCAL is false\n")
+    else:
+        LOCAL = True
+        print("LOCAL is true\n")
+
+    profile = os.getenv('PROFILE', "FALSE")
+    if profile.upper() == "FALSE":
+        PROFILE = False
+        print("PROFILE is false\n")
+    else:
+        PROFILE = True
+        print("PROFILE is true\n")
+
+    TIME_THRESHOLD = int(os.getenv('THRESHOLD', TIME_THRESHOLD))
+    print("Found THRESHOLD: {}\n".format(TIME_THRESHOLD))
 
     AmaraTask.init_tasks()
 
@@ -438,8 +476,6 @@ async def bound_fetch(sem, url, team, session):
 
 
 async def run_task_checks():
-    get_amara_init_info()
-
     tasks = []
     sem = asyncio.Semaphore(200)
 
@@ -452,7 +488,7 @@ async def run_task_checks():
         print("Total teams to scrape: {}\n".format(len(teams)))
 
         for team in teams:
-            url = activity_url_template.format(team.name)
+            url = team.make_url()
             task = asyncio.ensure_future(bound_fetch(sem, url, team, session))
             tasks.append(task)
 
@@ -470,6 +506,8 @@ async def run_task_checks():
 
 
 def hello(event, context):
+    get_amara_init_info()
+
     if LOCAL:
         print(datetime.now())
 
