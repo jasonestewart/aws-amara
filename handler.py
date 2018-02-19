@@ -8,21 +8,23 @@ import os
 from datetime import timedelta, datetime
 from bs4 import BeautifulSoup
 from html.parser import HTMLParser
-# import cProfile
-# import io
-# import pstats
+import cProfile
+import io
+import pstats
 
 activity_url_template = "https://amara.org/en/teams/{}/activity/"
 DEBUG = ""
 LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
 POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
 DB = boto3.resource("dynamodb")
+LOCAL = False
+PROFILE = False
 
 # time cutoff for interesting events in seconds (10 minutes)
 TIME_THRESHOLD = -60 * 10
 
 
-class AmaraTask:
+class AmaraTask(object):
     """Class for encapsulating Tasks on Amara.org"""
 
     # jason.e.stewart gmail account
@@ -40,15 +42,6 @@ class AmaraTask:
 
     NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616']
 
-    component_mapping = {
-        'year': timedelta(weeks=52.25),
-        'month': timedelta(weeks=4.34524),
-        'week': timedelta(weeks=1),
-        'day': timedelta(days=1),
-        'hour': timedelta(hours=1),
-        'minute': timedelta(minutes=1)
-    }
-
     def __init__(self, team, url='', video_url='', time='', text='', delta=None):
         self.team = team
         self.url = url
@@ -64,22 +57,35 @@ class AmaraTask:
         return "Team: {}\n\tURL: {}\n\tVideo URL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
             self.team, self.url, self.video_url, self.delta, self.time, self.text)
 
+    @staticmethod
+    def map_time_component(time_str):
+        component_mapping = {
+            'year': timedelta(weeks=52.25),
+            'month': timedelta(weeks=4.34524),
+            'week': timedelta(weeks=1),
+            'day': timedelta(days=1),
+            'hour': timedelta(hours=1),
+            'minute': timedelta(minutes=1)
+        }
+        return component_mapping[time_str]
+
+    @staticmethod
+    def time_str_to_delta(time_str):
+        """comp_to_delta('5 hours') returns datetime.timedelta(18000),"""
+        time_str = time_str.replace('ago', '').strip().rstrip('s')
+        numerator, comp = time_str.split(' ')
+        return int(numerator) * AmaraTask.map_time_component(comp)
+
     def set_delta(self):
         """ Parses e.g. 1 day, 5 hours ago as time delta"""
-
-        def comp_to_delta(str_):
-            """comp_to_delta('5 hours') returns datetime.timedelta(18000),"""
-            str_ = str_.replace('ago', '').strip().rstrip('s')
-            numerator, comp = str_.split(' ')
-            return int(numerator) * AmaraTask.component_mapping[comp]
-
-        self.delta = -sum([comp_to_delta(c) for c in self.time.split(',')], timedelta())
+        times = self.time.split(',')
+        self.delta = -sum([AmaraTask.time_str_to_delta(c) for c in times], timedelta())
 
     async def handle_new(self, session):
         await self.send_webhook(session, 'new')
 
     async def handle_review(self, session):
-        if self.team.name in AmaraTask.NO_REVIEW_TEAMS:
+        if self.team.name in self.NO_REVIEW_TEAMS:
             return
         await self.send_webhook(session, 'review')
 
@@ -89,44 +95,47 @@ class AmaraTask:
                    "video_url": self.video_url,
                    "type": type}
 
-        async with session.post(AmaraTask.WEBHOOKS_URL, json=payload) as response:
+        async with session.post(self.WEBHOOKS_URL, json=payload) as response:
             response = await response.read()
             print("sending message: {} to url:{}\n".format(payload,
-                                                           AmaraTask.WEBHOOKS_URL))
+                                                           self.WEBHOOKS_URL))
 
-    def init_tasks():
+    @classmethod
+    def init_tasks(cls):
         if DEBUG:
-            AmaraTask.WEBHOOKS_URL = os.getenv('URL', AmaraTask.WEBHOOKS_URL)
-            print("found webhooks url: {}".format(AmaraTask.WEBHOOKS_URL))
-        AmaraTask.init_new()
-        AmaraTask.init_review()
+            cls.WEBHOOKS_URL = os.getenv('URL', cls.WEBHOOKS_URL)
+            print("found webhooks url: {}".format(cls.WEBHOOKS_URL))
+        cls.init_new()
+        cls.init_review()
 
-    def init_new():
-        AmaraTask.ALERT_NEW_TERMS = ['added a video', 'unassigned']
-        AmaraTask.ALERT_NEW_STRING = "|".join(AmaraTask.ALERT_NEW_TERMS)
+    @classmethod
+    def init_new(cls):
+        cls.ALERT_NEW_TERMS = ['added a video', 'unassigned']
+        cls.ALERT_NEW_STRING = "|".join(cls.ALERT_NEW_TERMS)
         if DEBUG:
-            AmaraTask.ALERT_NEW_STRING = os.getenv("ALERT_NEW",
-                                                   AmaraTask.ALERT_NEW_STRING)
-            print("found new regex: {}".format(AmaraTask.ALERT_NEW_STRING))
+            cls.ALERT_NEW_STRING = os.getenv("ALERT_NEW",
+                                             cls.ALERT_NEW_STRING)
+            print("found new regex: {}".format(cls.ALERT_NEW_STRING))
 
-        AmaraTask.ALERT_NEW_REGEX = re.compile(AmaraTask.ALERT_NEW_STRING)
+        cls.ALERT_NEW_REGEX = re.compile(cls.ALERT_NEW_STRING)
 
-    def init_review():
-        AmaraTask.ALERT_REVIEW_TERMS = [r"endorsed.*(transcriber)"]
-        AmaraTask.ALERT_REVIEW_STRING = "|".join(AmaraTask.ALERT_REVIEW_TERMS)
+    @classmethod
+    def init_review(cls):
+        cls.ALERT_REVIEW_TERMS = [r"endorsed.*(transcriber)"]
+        cls.ALERT_REVIEW_STRING = "|".join(cls.ALERT_REVIEW_TERMS)
         if DEBUG:
-            AmaraTask.ALERT_REVIEW_STRING = os.getenv("ALERT_REVIEW",
-                                                      AmaraTask.ALERT_REVIEW_STRING)
-            print("found review regex: {}".format(AmaraTask.ALERT_REVIEW_STRING))
+            cls.ALERT_REVIEW_STRING = os.getenv("ALERT_REVIEW",
+                                                cls.ALERT_REVIEW_STRING)
+            print("found review regex: {}".format(cls.ALERT_REVIEW_STRING))
 
-        AmaraTask.ALERT_REVIEW_REGEX = re.compile(AmaraTask.ALERT_REVIEW_STRING)
+        cls.ALERT_REVIEW_REGEX = re.compile(cls.ALERT_REVIEW_STRING)
 
     async def filter(self, session):
         if DEBUG:
             print("filtering task: {}\n".format(self))
-        if AmaraTask.ALERT_NEW_REGEX.search(self.text):
+        if self.ALERT_NEW_REGEX.search(self.text):
             return await self.handle_new(session)
-        elif AmaraTask.ALERT_REVIEW_REGEX.search(self.text):
+        elif self.ALERT_REVIEW_REGEX.search(self.text):
             return await self.handle_review(session)
 
 
@@ -141,7 +150,7 @@ class AmaraTeam:
         return "<AmaraTeam: {}>\n".format(self)
 
     def __str__(self):
-        return "Name: {}\n\tURL: {}\n".format(self.name, self.url)
+        return "Name: {}\tURL: {}\n".format(self.name, self.url)
 
 
 def get_user():
@@ -380,13 +389,6 @@ def init_amara_teams(event, context):
 async def check_amara_teams():
     async with ClientSession() as session:
         teams = await auth_session_and_fetch_teams(session)
-        if DEBUG:
-            payload = {"team" : "ondemand656",
-                       "url"  : "http://giraffesocialenterprises.org.uk/"}
-            async with session.post(AmaraTask.WEBHOOKS_URL, json=payload) as response:
-                response = await response.read()
-                print("sending message: {} to url:{}\n".format(payload,
-                                                               AmaraTask.WEBHOOKS_URL))
         return teams
 
 
@@ -410,15 +412,11 @@ def get_amara_init_info():
 def check_teams(event, context):
     get_amara_init_info()
 
-    # Create client session that will ensure we dont open new connection
-    # per each request.
     loop = asyncio.get_event_loop()
     future = asyncio.ensure_future(check_amara_teams())
     teams = loop.run_until_complete(future)
 
-    result = ''
-    if not DEBUG:
-        result = update_teams(teams)
+    result = update_teams(teams)
 
     message = "Total teams to scrape: {}\n".format(len(teams))
     body = {
@@ -472,23 +470,27 @@ async def run_task_checks():
 
 
 def hello(event, context):
-    print(datetime.now())
+    if LOCAL:
+        print(datetime.now())
 
-#     pr = cProfile.Profile()
-#     pr.enable()
+    if PROFILE:
+        pr = cProfile.Profile()
+        pr.enable()
 
     loop = asyncio.get_event_loop()
     future = asyncio.ensure_future(run_task_checks())
     loop.run_until_complete(future)
 
-#     pr.disable()
-#     s = io.StringIO()
-#     sortby = 'cumulative'
-#     ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
-#     ps.print_stats()
-#     print(s.getvalue())
+    if PROFILE:
+        pr.disable()
+        s = io.StringIO()
+        sortby = 'cumulative'
+        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+        ps.print_stats()
+        print(s.getvalue())
 
-    print(datetime.now())
+    if LOCAL:
+        print(datetime.now())
 
     response = {
         "statusCode": 200,
