@@ -387,7 +387,6 @@ def get_amara_init_info():
     global TIME_THRESHOLD
 
     DEBUG = os.getenv('DEBUG', "FALSE")
-    print("found DEBUG: {}\n".format(DEBUG))
     if DEBUG.upper() == "FALSE":
         DEBUG = False
         print("DEBUG is false\n")
