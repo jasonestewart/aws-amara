@@ -68,9 +68,11 @@ functions:
     handler: handler.hello
     environment: # Function level environment variables
       DEBUG: FALSE
+      LOCAL: TRUE
+      PROFILE: FALSE
       ALERT_REVIEW: approved
       ALERT_NEW: edited
-      THRESHOLD: -3600
+      THRESHOLD: -2400
     timeout: 120
     events:
       - schedule:
