@@ -30,6 +30,9 @@ class AmaraTask(object):
     WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/2976959/zwt88b/"
 
     BASE_URL = "https://amara.org"
+    EN_URL = "/en/videos/"
+    VIDEO_URL_TEMPLATE = BASE_URL + EN_URL + "{}/?team={}"
+    VIDEO_URL_REGEX = re.compile(r"^\w+")
 
     ALERT_REVIEW_TERMS = []  # What terms should trigger a review alert
     ALERT_REVIEW_STRING = ""
@@ -41,7 +44,7 @@ class AmaraTask(object):
 
     NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616']
 
-    def __init__(self, team, url='', video_url='', time='', text='', delta=None):
+    def __init__(self, team, url='', time='', text='', video_url='', delta=None):
         self.team = team
         self.url = url
         self.video_url = video_url
@@ -80,6 +83,11 @@ class AmaraTask(object):
         times = self.time.split(',')
         self.delta = -sum([AmaraTask.time_str_to_delta(c) for c in times], timedelta())
 
+    def set_video_url(self, url):
+        url = url.strip(self.EN_URL)
+        film_id = self.VIDEO_URL_REGEX.match(url).group()
+        self.video_url = self.VIDEO_URL_TEMPLATE.format(film_id, self.team.name)
+
     async def handle_new(self, session):
         await self.send_webhook(session, 'new')
 
@@ -91,7 +99,7 @@ class AmaraTask(object):
     async def send_webhook(self, session, type):
         payload = {"team": self.team.name,
                    "url": self.url,
-                   "video_url": self.BASE_URL + self.video_url,
+                   "video_url": self.video_url,
                    "type": type}
 
         async with session.post(self.WEBHOOKS_URL, json=payload) as response:
@@ -188,6 +196,7 @@ async def auth_session_and_fetch_teams(session):
     if DEBUG:
         teams.append(AmaraTeam("demand-465", "/en/teams/demand-465/"))
         teams.append(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
+        teams.append(AmaraTeam("ondemand616", "/en/teams/ondemand616/"))
         return teams
 
     async with session.get(user.LOGIN_URL) as response:
@@ -256,7 +265,7 @@ class MyHTMLParser(HTMLParser):
             elif tag == 'a':
                 if self._seen_author:
                     attr_dict = dict(attrs)
-                    self.cur_task.video_url = attr_dict['href']
+                    self.cur_task.set_video_url(attr_dict['href'])
                 else:
                     self._seen_author = True
         elif tag == "div":
@@ -295,23 +304,32 @@ async def fetch_team_activities(url, team, session):
         a = []
         time = "2 minutes ago"
         if "465" in team.name:
-            team = AmaraTask(team,
+            task = AmaraTask(team,
                              "https://amara.org/en/teams/demand-465/activity/",
-                             '/en/videos/oZSRr0kN6GE2/info/etc_layla_arabic_subs_sl_170719mp4/',
                              time,
-                             "\n2 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+                             "\n2 minutes ago\n\nOmnia Kamel\n  endorsed English subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4 (transcriber)\n\n"
             )
-            team.set_delta()
-            a.append(team)
+            task.set_video_url('/en/videos/oZSRr0kN6GE2/info/etc_layla_arabic_subs_sl_170719mp4/')
+            task.set_delta()
+            a.append(task)
+        elif "616" in team.name:
+            task = AmaraTask(team,
+                             "https://amara.org/en/teams/ondemand616/activity/",
+                             time,
+                             "\n2 minutes ago\n\nign_api added a video: Fe Review\n\n"
+            )
+            task.set_video_url('/en/videos/CFxLYlgjS67T/info/fe-review/?team=ondemand616')
+            task.set_delta()
+            a.append(task)
         else:
-            team = AmaraTask(team,
+            task = AmaraTask(team,
                              "https://amara.org/en/teams/ondemand060/activity/",
-                             '/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060',
                              time,
-                             "\n2 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+                             "\n2 minutes ago\n\nOmnia Kamel\n  endrosed English subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4 (transcriber)\n\n"
             )
-            team.set_delta()
-            a.append(team)
+            task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
+            task.set_delta()
+            a.append(task)
 
         return a
 
