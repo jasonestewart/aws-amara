@@ -42,7 +42,8 @@ class AmaraTask(object):
     ALERT_NEW_STRING = ""
     ALERT_NEW_REGEX = None
 
-    NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616']
+    NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616', 'ondemand427-english-team',
+                       'ondemand750', 'ondemand806', 'ondemand828', 'ondemand830', 'ondemand676']
 
     def __init__(self, team, url='', time='', text='', video_url='', delta=None):
         self.team = team
@@ -51,13 +52,22 @@ class AmaraTask(object):
         self.delta = delta
         self.time = time
         self.text = text
+        self.type = ''
 
     def __repr__(self):
         return "<AmaraTask: {}>\n".format(self)
 
     def __str__(self):
-        return "Team: {}\n\tURL: {}\n\tVideo URL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
-            self.team, self.url, self.video_url, self.delta, self.time, self.text)
+        return "Team: {}\tURL: {}\n\tType: {}\n\tVideo URL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
+            self.team, self.url, self.type, self.video_url, self.delta, self.time, self.text)
+
+    @classmethod
+    async def handle_jobs(cls, session, jobs):
+        current_jobs = await fetch_current_jobs(session)
+        curr_job_teams = list(map(lambda j: j.team.name, current_jobs))
+        avail_jobs = list(filter(lambda j: j and j.team.name not in curr_job_teams, jobs))
+        for job in avail_jobs:
+            print("Found new job: {}".format(job))
 
     @staticmethod
     def map_time_component(time_str):
@@ -89,18 +99,22 @@ class AmaraTask(object):
         self.video_url = self.VIDEO_URL_TEMPLATE.format(film_id, self.team.name)
 
     async def handle_new(self, session):
-        await self.send_webhook(session, 'new')
+        self.type = 'new'
+        await self.send_webhook(session)
+        return self
 
     async def handle_review(self, session):
         if self.team.name in self.NO_REVIEW_TEAMS:
-            return
-        await self.send_webhook(session, 'review')
+            return []
+        self.type = 'review'
+        await self.send_webhook(session)
+        return self
 
-    async def send_webhook(self, session, type):
+    async def send_webhook(self, session):
         payload = {"team": self.team.name,
                    "url": self.url,
                    "video_url": self.video_url,
-                   "type": type}
+                   "type": self.type}
 
         async with session.post(self.WEBHOOKS_URL, json=payload) as response:
             response = await response.read()
@@ -170,6 +184,7 @@ class AmaraUser(object):
 
     LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
     POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
+    DASHBOARD_URL = "https://amara.org/en/profiles/dashboard/"
 
     __instance = None
 
@@ -186,6 +201,31 @@ class AmaraUser(object):
         user = DB.Table("user")
         response = user.get_item(Key={"service_name" : "amara"})
         return response["Item"]
+
+
+async def fetch_current_jobs(session):
+    user = AmaraUser()
+    async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+
+        async with session.get(user.DASHBOARD_URL) as response:
+
+            doc = await response.text()
+
+            soup = BeautifulSoup(doc, 'html.parser')
+            menu = soup.find(id='page-header')
+
+            current_jobs = []
+            if DEBUG:
+                task = AmaraTask(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
+                task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
+                task.type = 'new'
+                current_jobs.append(task)
+                task = AmaraTask(AmaraTeam("ondemand616", "/en/teams/ondemand616/"))
+                task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
+                task.type = 'new'
+                current_jobs.append(task)
+
+            return current_jobs
 
 
 async def auth_session_and_fetch_teams(session):
@@ -519,8 +559,13 @@ async def run_task_checks():
         print("tasks: {}\n".format(tasks))
 
         # Filter by terms
+        jobs = []
         for task in tasks:
-            await task.filter(session)
+            jobs.append(await task.filter(session))
+        jobs = list(itertools.chain(jobs))
+
+        if jobs:
+            await AmaraTask.handle_jobs(session, jobs)
 
 
 def hello(event, context):
