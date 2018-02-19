@@ -67,7 +67,7 @@ functions:
   hello:
     handler: handler.hello
     environment: # Function level environment variables
-      DEBUG: TRUE
+      DEBUG: FALSE
       ALERT_REVIEW: approved
       ALERT_NEW: edited
       THRESHOLD: -3600
