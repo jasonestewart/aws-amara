@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 # import pstats
 
 activity_url_template = "https://amara.org/en/teams/{}/activity/"
-DEBUG = "FALSE"
+DEBUG = ""
 LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
 POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
 DB = boto3.resource("dynamodb")
@@ -49,9 +49,10 @@ class AmaraTask:
         'minute': timedelta(minutes=1)
     }
 
-    def __init__(self, team, url='', time='', delta=None, text=''):
+    def __init__(self, team, url='', video_url='', time='', text='', delta=None):
         self.team = team
         self.url = url
+        self.video_url = video_url
         self.delta = delta
         self.time = time
         self.text = text
@@ -60,8 +61,8 @@ class AmaraTask:
         return "<AmaraTask: {}>\n".format(self)
 
     def __str__(self):
-        return "Team: {}\n\tURL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
-            self.team, self.url, self.delta, self.time, self.text)
+        return "Team: {}\n\tURL: {}\n\tVideo URL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
+            self.team, self.url, self.video_url, self.delta, self.time, self.text)
 
     def set_delta(self):
         """ Parses e.g. 1 day, 5 hours ago as time delta"""
@@ -83,7 +84,10 @@ class AmaraTask:
         await self.send_webhook(session, 'review')
 
     async def send_webhook(self, session, type):
-        payload = {"team": self.team.name, "url": self.url, "type": type}
+        payload = {"team": self.team.name,
+                   "url": self.url,
+                   "video_url": self.video_url,
+                   "type": type}
 
         async with session.post(AmaraTask.WEBHOOKS_URL, json=payload) as response:
             response = await response.read()
@@ -265,15 +269,19 @@ async def fetch_team_activities(url, team, session):
         if "465" in team.name:
             team = AmaraTask(team,
                              "https://amara.org/en/teams/demand-465/activity/",
-                             time)
-            team.text = "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+                             '/en/videos/oZSRr0kN6GE2/info/etc_layla_arabic_subs_sl_170719mp4/',
+                             time,
+                             "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+            )
             team.set_delta()
             a.append(team)
         else:
             team = AmaraTask(team,
                              "https://amara.org/en/teams/ondemand060/activity/",
-                             time)
-            team.text = "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+                             '/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060',
+                             time,
+                             "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+            )
             team.set_delta()
             a.append(team)
 
