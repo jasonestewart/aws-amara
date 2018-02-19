@@ -7,21 +7,16 @@ import asyncio
 import os
 from datetime import timedelta, datetime
 from bs4 import BeautifulSoup
+from html.parser import HTMLParser
+# import cProfile
+# import io
+# import pstats
 
 activity_url_template = "https://amara.org/en/teams/{}/activity/"
-DEBUG = True
+DEBUG = "FALSE"
 LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
 POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
 DB = boto3.resource("dynamodb")
-
-component_mapping = {
-    'year': timedelta(weeks=52.25),
-    'month': timedelta(weeks=4.34524),
-    'week': timedelta(weeks=1),
-    'day': timedelta(days=1),
-    'hour': timedelta(hours=1),
-    'minute': timedelta(minutes=1)
-}
 
 # time cutoff for interesting events in seconds (10 minutes)
 TIME_THRESHOLD = -60 * 10
@@ -45,7 +40,16 @@ class AmaraTask:
 
     NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616']
 
-    def __init__(self, team, url, delta, time, text):
+    component_mapping = {
+        'year': timedelta(weeks=52.25),
+        'month': timedelta(weeks=4.34524),
+        'week': timedelta(weeks=1),
+        'day': timedelta(days=1),
+        'hour': timedelta(hours=1),
+        'minute': timedelta(minutes=1)
+    }
+
+    def __init__(self, team, url='', time='', delta=None, text=''):
         self.team = team
         self.url = url
         self.delta = delta
@@ -58,7 +62,17 @@ class AmaraTask:
     def __str__(self):
         return "Team: {}\n\tURL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
             self.team, self.url, self.delta, self.time, self.text)
-            
+
+    def set_delta(self):
+        """ Parses e.g. 1 day, 5 hours ago as time delta"""
+
+        def comp_to_delta(str_):
+            """comp_to_delta('5 hours') returns datetime.timedelta(18000),"""
+            str_ = str_.replace('ago', '').strip().rstrip('s')
+            numerator, comp = str_.split(' ')
+            return int(numerator) * AmaraTask.component_mapping[comp]
+
+        self.delta = -sum([comp_to_delta(c) for c in self.time.split(',')], timedelta())
 
     async def handle_new(self, session):
         await self.send_webhook(session, 'new')
@@ -132,29 +146,16 @@ def get_user():
     return response["Item"]
 
 
-def timestring_to_minutes_delta(string):
-    """ Parses e.g. 1 day, 5 hours ago as time delta"""
-
-    def comp_to_delta(str_):
-        """comp_to_delta('5 hours') returns datetime.timedelta(18000),"""
-        str_ = str_.replace('ago', '').strip().rstrip('s')
-        numerator, comp = str_.split(' ')
-        return int(numerator) * component_mapping[comp]
-
-    delta = -sum([comp_to_delta(c) for c in string.split(',')], timedelta())
-    return delta
-
-
 async def auth_session_and_fetch_teams(session):
     login = get_user()
     username = login['user']
     password = login['pass']
 
     teams = []
-    
+
     if DEBUG:
-        teams.append(AmaraTeam("demand-465","/en/teams/demand-465/"))
-        teams.append(AmaraTeam("ondemand060","/en/teams/ondemand060/"))
+        teams.append(AmaraTeam("demand-465", "/en/teams/demand-465/"))
+        teams.append(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
         return teams
 
     async with session.get(LOGIN_URL) as response:
@@ -193,48 +194,102 @@ async def auth_session_and_fetch_teams(session):
         return teams
 
 
+class HTMLFinished(Exception):
+    def __init__(self, *args, **kwargs):
+        Exception.__init__(self, *args, **kwargs)
+
+
+class MyHTMLParser(HTMLParser):
+    WAITING = 1
+    IN_ACT_LIST = 2
+    IN_TIME = 3
+
+    def __init__(self, team):
+        self.tasks = []
+        self.cur_task = None
+        self._state = self.WAITING
+        self._seen_author = False
+        self.team = team
+        super().__init__()
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'p':
+            return
+
+        if self._state == self.IN_ACT_LIST:
+            if tag == 'li':
+                self.cur_task = AmaraTask(self.team)
+            elif tag == 'span':
+                self._state = self.IN_TIME
+            elif tag == 'a':
+                if self._seen_author:
+                    attr_dict = dict(attrs)
+                    self.cur_task.video_url = attr_dict['href']
+                else:
+                    self._seen_author = True
+        elif tag == "div":
+            attr_dict = dict(attrs)
+            if 'id' not in attr_dict:
+                return
+            elif attr_dict['id'] == 'activity-list':
+                self._state = self.IN_ACT_LIST
+
+    def handle_endtag(self, tag):
+        if tag == 'p':
+            return
+
+        if self._state == self.IN_ACT_LIST:
+            if tag == 'ul':
+                raise HTMLFinished()
+        elif self._state == self.IN_TIME:
+            if tag == 'span':
+                self._state = self.IN_ACT_LIST
+                self.cur_task.set_delta()
+                if self.cur_task.delta.total_seconds() < TIME_THRESHOLD:
+                    raise HTMLFinished()
+                else:
+                    self.tasks.append(self.cur_task)
+
+    def handle_data(self, data):
+        if self.cur_task is not None:
+            self.cur_task.text += data
+
+        if self._state == self.IN_TIME:
+            self.cur_task.time += data
+
+
 async def fetch_team_activities(url, team, session):
+    if DEBUG:
+        a = []
+        time = "2 minutes ago"
+        if "465" in team.name:
+            team = AmaraTask(team,
+                             "https://amara.org/en/teams/demand-465/activity/",
+                             time)
+            team.text = "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+            team.set_delta()
+            a.append(team)
+        else:
+            team = AmaraTask(team,
+                             "https://amara.org/en/teams/ondemand060/activity/",
+                             time)
+            team.text = "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
+            team.set_delta()
+            a.append(team)
+
+        return a
 
     async with session.get(url) as response:
 
         doc = await response.text()
-        soup = BeautifulSoup(doc, 'html.parser')
-        activity = soup.find(id='activity-list')
-
-        a = []
-        
-        if DEBUG:
-            time = "2 minutes ago"
-            if "465" in team.name:
-                a.append(AmaraTask(team, 
-                                   "https://amara.org/en/teams/demand-465/activity/",
-                                   timestring_to_minutes_delta(time),
-                                   time, 
-                                   "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
-                                   )
-                        )
-            else:
-                 a.append(AmaraTask(team, 
-                                   "https://amara.org/en/teams/ondemand060/activity/",
-                                   timestring_to_minutes_delta(time),
-                                   time, 
-                                   "\n52 minutes ago\n\nOmnia Kamel\n  approved Arabic subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4\n\n"
-                                   )
-                          )
-             
-
-        if activity is not None:
-            for item, time in [(x, x.find(class_='timestamp').text) for x in activity.find_all('li')]:
-
-                _delta = timestring_to_minutes_delta(time)
-
-                # don't bother with tasks older than 20 minutes
-                if _delta.total_seconds() < TIME_THRESHOLD:
-                    break
-
-                a.append(AmaraTask(team, url, _delta, time, item.text))
-
-        return a
+        # soup = BeautifulSoup(doc, 'html.parser')
+        # activity = soup.find(id='activity-list')
+        p = MyHTMLParser(team)
+        try:
+            p.feed(doc)
+        except HTMLFinished:
+            pass
+        return p.tasks
 
 
 def update_team(table, team):
@@ -332,7 +387,8 @@ def get_amara_init_info():
     global TIME_THRESHOLD
 
     DEBUG = os.getenv('DEBUG', "FALSE")
-    if DEBUG == "FALSE":
+    print("found DEBUG: {}\n".format(DEBUG))
+    if DEBUG.upper() == "FALSE":
         DEBUG = False
         print("DEBUG is false\n")
     else:
@@ -409,13 +465,23 @@ async def run_task_checks():
 
 
 def hello(event, context):
-    print(datetime.now())        
+    print(datetime.now())
+
+#     pr = cProfile.Profile()
+#     pr.enable()
 
     loop = asyncio.get_event_loop()
     future = asyncio.ensure_future(run_task_checks())
     loop.run_until_complete(future)
-    
-    print(datetime.now())        
+
+#     pr.disable()
+#     s = io.StringIO()
+#     sortby = 'cumulative'
+#     ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+#     ps.print_stats()
+#     print(s.getvalue())
+
+    print(datetime.now())
 
     response = {
         "statusCode": 200,
