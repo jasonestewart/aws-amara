@@ -68,20 +68,26 @@ functions:
     handler: handler.hello
     environment: # Function level environment variables
       DEBUG: FALSE
-      LOCAL: TRUE
+      LOCAL: FALSE
+#      DEBUG: TRUE
+#      LOCAL: TRUE
+#      URL: http://requestbin.fullcontact.com/y833sdy8
       PROFILE: FALSE
-      ALERT_REVIEW: approved
-      ALERT_NEW: edited
-      THRESHOLD: -2400
+#      ALERT_REVIEW: approved
+#      ALERT_NEW: edited
+#      THRESHOLD: -2400
+      THRESHOLD: -400
     timeout: 120
     events:
       - schedule:
-          rate: cron(*/10 * * * ? *)
+          rate: cron(*/5 * * * ? *)
       - enabled: true    
   check_teams:
     handler: handler.check_teams
   init_amara_teams:
     handler: handler.init_amara_teams
+  get_stored_pages:
+    handler: handler.get_stored_pages
 
 
 #    The following are a few example events you can configure
