@@ -1,16 +1,16 @@
 import json
-import re
 import itertools
 import boto3
 from aiohttp import ClientSession, TCPConnector
 import asyncio
 import os
-from datetime import timedelta, datetime
+from datetime import datetime
 from bs4 import BeautifulSoup
 from html.parser import HTMLParser
 import cProfile
 import io
 import pstats
+from amara import AmaraUser, AmaraTask, AmaraTeam, AmaraJob
 
 DEBUG = ""
 DB = boto3.resource("dynamodb")
@@ -19,228 +19,6 @@ PROFILE = False
 
 # time cutoff for interesting events in seconds (10 minutes)
 TIME_THRESHOLD = -60 * 10
-
-
-class AmaraTask(object):
-    """Class for encapsulating Tasks on Amara.org"""
-
-    # jason.e.stewart gmail account
-    # WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/738949/z8ql5t/"
-    # jason baynvc account
-    WEBHOOKS_URL = "https://hooks.zapier.com/hooks/catch/2976959/zwt88b/"
-
-    BASE_URL = "https://amara.org"
-    EN_URL = "/en/videos/"
-    VIDEO_URL_TEMPLATE = BASE_URL + EN_URL + "{}/?team={}"
-    VIDEO_URL_REGEX = re.compile(r"^\w+")
-
-    ALERT_REVIEW_TERMS = []  # What terms should trigger a review alert
-    ALERT_REVIEW_STRING = ""
-    ALERT_REVIEW_REGEX = None
-
-    ALERT_NEW_TERMS = []  # What terms should trigger a new video alert
-    ALERT_NEW_STRING = ""
-    ALERT_NEW_REGEX = None
-
-    NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616', 'ondemand427-english-team',
-                       'ondemand750', 'ondemand806', 'ondemand828', 'ondemand830', 'ondemand676']
-
-    def __init__(self, team, url='', time='', text='', video_url='', delta=None):
-        self.team = team
-        self.url = url
-        self.video_url = video_url
-        self.delta = delta
-        self.time = time
-        self.text = text
-        self.type = ''
-
-    def __repr__(self):
-        return "<AmaraTask: {}>\n".format(self)
-
-    def __str__(self):
-        return "Team: {}\tURL: {}\n\tType: {}\n\tVideo URL: {}\n\tdelta: {}\n\ttime: {}\n\ttext: {}\n".format(
-            self.team, self.url, self.type, self.video_url, self.delta, self.time, self.text)
-
-    @classmethod
-    async def handle_jobs(cls, session, jobs):
-        current_jobs = await fetch_current_jobs(session)
-        curr_job_teams = list(map(lambda j: j.team.name, current_jobs))
-        avail_jobs = list(filter(lambda j: j and j.team.name not in curr_job_teams, jobs))
-        for job in avail_jobs:
-            print("Found new job: {}".format(job))
-
-    @staticmethod
-    def map_time_component(time_str):
-        component_mapping = {
-            'year': timedelta(weeks=52.25),
-            'month': timedelta(weeks=4.34524),
-            'week': timedelta(weeks=1),
-            'day': timedelta(days=1),
-            'hour': timedelta(hours=1),
-            'minute': timedelta(minutes=1)
-        }
-        return component_mapping[time_str]
-
-    @staticmethod
-    def time_str_to_delta(time_str):
-        """comp_to_delta('5 hours') returns datetime.timedelta(18000),"""
-        time_str = time_str.replace('ago', '').strip().rstrip('s')
-        numerator, comp = time_str.split(' ')
-        return int(numerator) * AmaraTask.map_time_component(comp)
-
-    def set_delta(self):
-        """ Parses e.g. 1 day, 5 hours ago as time delta"""
-        times = self.time.split(',')
-        self.delta = -sum([AmaraTask.time_str_to_delta(c) for c in times], timedelta())
-
-    def set_video_url(self, url):
-        url = url.strip(self.EN_URL)
-        film_id = self.VIDEO_URL_REGEX.match(url).group()
-        self.video_url = self.VIDEO_URL_TEMPLATE.format(film_id, self.team.name)
-
-    async def handle_new(self, session):
-        self.type = 'new'
-        await self.send_webhook(session)
-        return self
-
-    async def handle_review(self, session):
-        if self.team.name in self.NO_REVIEW_TEAMS:
-            return []
-        self.type = 'review'
-        await self.send_webhook(session)
-        return self
-
-    async def save_page(self, session):
-        async with session.get(self.video_url) as response:
-            doc = await response.text()
-
-            table = DB.Table('stored_pages')
-            id = str(datetime.utcnow()) + self.team.name
-            response = table.put_item(
-               Item={
-                    'ID': id,
-                    'page': doc,
-                    'url': self.video_url,
-                }
-            )
-
-    async def send_webhook(self, session):
-        await self.save_page(session)
-        payload = {"team": self.team.name,
-                   "url": self.url,
-                   "video_url": self.video_url,
-                   "type": self.type}
-
-        async with session.post(self.WEBHOOKS_URL, json=payload) as response:
-            response = await response.read()
-            print("sending message: {} to url:{}\n".format(payload,
-                                                           self.WEBHOOKS_URL))
-
-    @classmethod
-    def init_tasks(cls):
-        if DEBUG:
-            cls.WEBHOOKS_URL = os.getenv('URL', cls.WEBHOOKS_URL)
-            print("found webhooks url: {}".format(cls.WEBHOOKS_URL))
-        cls.init_new()
-        cls.init_review()
-
-    @classmethod
-    def init_new(cls):
-        cls.ALERT_NEW_TERMS = ['added a video', 'unassigned']
-        cls.ALERT_NEW_STRING = "|".join(cls.ALERT_NEW_TERMS)
-        if DEBUG:
-            cls.ALERT_NEW_STRING = os.getenv("ALERT_NEW",
-                                             cls.ALERT_NEW_STRING)
-            print("found new regex: {}".format(cls.ALERT_NEW_STRING))
-
-        cls.ALERT_NEW_REGEX = re.compile(cls.ALERT_NEW_STRING)
-
-    @classmethod
-    def init_review(cls):
-        cls.ALERT_REVIEW_TERMS = [r"endorsed.*(transcriber)"]
-        cls.ALERT_REVIEW_STRING = "|".join(cls.ALERT_REVIEW_TERMS)
-        if DEBUG:
-            cls.ALERT_REVIEW_STRING = os.getenv("ALERT_REVIEW",
-                                                cls.ALERT_REVIEW_STRING)
-            print("found review regex: {}".format(cls.ALERT_REVIEW_STRING))
-
-        cls.ALERT_REVIEW_REGEX = re.compile(cls.ALERT_REVIEW_STRING)
-
-    async def filter(self, session):
-        if DEBUG:
-            print("filtering task: {}\n".format(self))
-        if self.ALERT_NEW_REGEX.search(self.text):
-            return await self.handle_new(session)
-        elif self.ALERT_REVIEW_REGEX.search(self.text):
-            return await self.handle_review(session)
-
-
-class AmaraTeam(object):
-    """Class for encapsulating Teams on Amara.org"""
-
-    TEAM_URL_TEMPLATE = "https://amara.org/en/teams/{}/activity/"
-
-    def __init__(self, name, url):
-        self.name = name
-        self.url = url
-
-    def make_url(self):
-        return self.TEAM_URL_TEMPLATE.format(self.name)
-
-    def __repr__(self):
-        return "<AmaraTeam: {}>\n".format(self)
-
-    def __str__(self):
-        return "Name: {}\tURL: {}\n".format(self.name, self.url)
-
-
-class AmaraUser(object):
-    """Class for encapsulating Amara.org login"""
-
-    LOGIN_URL = "https://amara.org/en/auth/login/?next=/"
-    POST_LOGIN_URL = "https://amara.org/en/auth/login_post/"
-    DASHBOARD_URL = "https://amara.org/en/profiles/dashboard/"
-
-    __instance = None
-
-    def __new__(cls):
-        if cls.__instance is None:
-            cls.__instance = object.__new__(cls)
-            login = cls.get_user()
-            cls.__instance.name = login['user']
-            cls.__instance.password = login['pass']
-        return cls.__instance
-
-    @staticmethod
-    def get_user():
-        user = DB.Table("user")
-        response = user.get_item(Key={"service_name" : "amara"})
-        return response["Item"]
-
-
-async def fetch_current_jobs(session):
-    user = AmaraUser()
-    async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
-
-        async with session.get(user.DASHBOARD_URL) as response:
-
-            doc = await response.text()
-
-            soup = BeautifulSoup(doc, 'html.parser')
-            menu = soup.find(id='page-header')
-
-            current_jobs = []
-            if DEBUG:
-                task = AmaraTask(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
-                task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
-                task.type = 'new'
-                current_jobs.append(task)
-                task = AmaraTask(AmaraTeam("ondemand616", "/en/teams/ondemand616/"))
-                task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
-                task.type = 'new'
-                current_jobs.append(task)
-
-            return current_jobs
 
 
 async def auth_session_and_fetch_teams(session):
@@ -517,7 +295,26 @@ def get_amara_init_info():
     TIME_THRESHOLD = int(os.getenv('THRESHOLD', TIME_THRESHOLD))
     print("Found THRESHOLD: {}\n".format(TIME_THRESHOLD))
 
+    AmaraTask.DEBUG = DEBUG
+    AmaraUser.DEBUG = DEBUG
     AmaraTask.init_tasks()
+
+
+def get_stored_pages(event, context):
+    db_table = DB.Table("stored_pages")
+    response = db_table.scan()
+    pages = response["Items"]
+    for page in pages:
+        print(page['page'])
+    body = {
+        "result"  : "found: {} pgaes".format(len(pages)),
+    }
+    response = {
+        "statusCode": 200,
+        "body": json.dumps(body)
+    }
+
+    return response
 
 
 def check_teams(event, context):
@@ -571,16 +368,19 @@ async def run_task_checks():
         # Flatten nested activities
         tasks = list(itertools.chain(*await tasks))
 
-        print("tasks: {}\n".format(tasks))
+        print("Found tasks: {}\n".format(tasks))
 
         # Filter by terms
         jobs = []
         for task in tasks:
-            jobs.append(await task.filter(session))
-        jobs = list(itertools.chain(jobs))
+            job = task.filter()
+            if job:
+                jobs.append(job)
+
+        print("Found jobs: {}\n".format(jobs))
 
         if jobs:
-            await AmaraTask.handle_jobs(session, jobs)
+            await AmaraJob.handle_jobs(session, jobs)
 
 
 def hello(event, context):
