@@ -110,7 +110,22 @@ class AmaraTask(object):
         await self.send_webhook(session)
         return self
 
+    async def save_page(self, session):
+        async with session.get(self.video_url) as response:
+            doc = await response.text()
+
+            table = DB.Table('stored_pages')
+            id = str(datetime.utcnow()) + self.team.name
+            response = table.put_item(
+               Item={
+                    'ID': id,
+                    'page': doc,
+                    'url': self.video_url,
+                }
+            )
+
     async def send_webhook(self, session):
+        await self.save_page(session)
         payload = {"team": self.team.name,
                    "url": self.url,
                    "video_url": self.video_url,
