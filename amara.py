@@ -154,7 +154,8 @@ class AmaraJob(object):
 
     @classmethod
     async def handle_jobs(cls, session, jobs):
-        curr_job_teams = await AmaraUser.fetch_current_jobs(session)
+        user = AmaraUser()
+        curr_job_teams = await user.fetch_current_jobs(session)
 
         avail_jobs = list(filter(lambda j: j and j.task.team.name not in curr_job_teams, jobs))
 
@@ -188,8 +189,8 @@ class AmaraJob(object):
 <body>
   <h1>Amara Alert: {type}</h1>
   <p>Action from team {team} requires your attention
-    <a href='{team_url}'>team activity</a></p>
-  <p><a href='{url}'>video URL</a>.</p>
+    <a href='{team_url}'>{team_url}</a></p>
+  <p><a href='{url}'>{url}</a>.</p>
 </body>
 </html>
         """.format(team=task.team.name,
@@ -217,12 +218,41 @@ class AmaraReviewJob(AmaraJob):
 class AmaraTranscriptionJob(AmaraJob):
     """Class for encapsulating new transcription jobs on Amara.org"""
 
+    JOIN_URL_TEMPLATE = "/en/videos/{}/collaborations/en/join/subtitler/"
+
     def __init__(self, task):
         self.type = 'transcription'
         self.task = task
 
     async def handle(self, session):
-        await self.send_email(session)
+        doc = ''
+        if self.DEBUG:
+            self.task.film_id = "A3B5wmBhxbPr"
+            with open("transcription-test.html") as f:
+                doc = f.read()
+                print("DEBUG: found doc length: {}".format(len(doc)))
+        else:
+            response = await session.post(self.task.video_url)
+            doc = await response.text()
+
+        soup = BeautifulSoup(doc, 'html.parser')
+        prog_node = soup.find('section', 'videoSubtitles-progress')
+        if 'English subtitles' in prog_node.get_text():
+            href = soup.find('a', 'button cta block')['href']
+            if 'join' not in href:
+                print("expected 'join' but found: {}".format(href))
+            else:
+                join_url = self.JOIN_URL_TEMPLATE.format(self.task.film_id)
+                if not href == join_url:
+                    print("looking for join URL: {}, and found: {}\n".format(join_url, href))
+                async with session.post(BASE_URL + join_url) as response:
+                    if response.status is not '200':
+                        print("error while joining: {}, status: {}\nheaders: {}".format(join_url, response.status, response.headers))
+                        await self.send_email(session)
+                    else:
+                        user = AmaraUser()
+                        user.add_new_job(self)
+                        await self.send_email(session)
 
 
 class AmaraUser(object):
@@ -235,6 +265,9 @@ class AmaraUser(object):
     DASHBOARD_URL = "https://amara.org/en/profiles/dashboard/"
 
     __instance = None
+
+    def __init__(self):
+        self.__current_jobs = None
 
     def __new__(cls):
         if cls.__instance is None:
@@ -250,28 +283,34 @@ class AmaraUser(object):
         response = user.get_item(Key={"service_name" : "amara"})
         return response["Item"]
 
-    @classmethod
-    async def fetch_current_jobs(cls, session):
-        async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+    def add_new_job(self, job):
+        if self.__current_jobs is None:
+            print("add_new_job called before current jobs set")
+        else:
+            self.__current_jobs.append(job)
 
-            async with session.get(cls.DASHBOARD_URL) as response:
+    async def fetch_current_jobs(self, session):
+        if self.__current_jobs is None:
 
+            async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+
+                response = await session.get(self.DASHBOARD_URL)
                 doc = await response.text()
 
                 soup = BeautifulSoup(doc, 'html.parser')
                 menu = soup.find(id='page-header')
 
-                current_jobs = []
-                if cls.DEBUG:
+                self.__current_jobs = []
+                if self.DEBUG:
                     task = AmaraTask(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
                     task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
                     task.film_id = "8wxNgiJyLY0H"
                     task.type = 'new'
-                    current_jobs.append(task)
+                    self.__current_jobs.append(task)
                     task = AmaraTask(AmaraTeam("ondemand616", "/en/teams/ondemand616/"))
                     task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
                     task.film_id = "8wxNgiJyLY0H"
                     task.type = 'new'
-                    current_jobs.append(task)
+                    self.__current_jobs.append(task)
 
-                return current_jobs
+        return self.__current_jobs
