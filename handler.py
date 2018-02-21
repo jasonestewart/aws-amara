@@ -297,6 +297,7 @@ def get_amara_init_info():
 
     AmaraTask.DEBUG = DEBUG
     AmaraUser.DEBUG = DEBUG
+    AmaraJob.DEBUG = DEBUG
     AmaraTask.init_tasks()
 
 
@@ -304,8 +305,13 @@ def get_stored_pages(event, context):
     db_table = DB.Table("stored_pages")
     response = db_table.scan()
     pages = response["Items"]
+    i = 0
     for page in pages:
-        print(page['page'])
+        i += 1
+        fname = "page{}.html".format(i)
+        with open(fname, 'w') as f:
+            f.write(page['page'])
+
     body = {
         "result"  : "found: {} pgaes".format(len(pages)),
     }
