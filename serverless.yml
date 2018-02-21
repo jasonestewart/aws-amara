@@ -76,7 +76,7 @@ functions:
 #      ALERT_REVIEW: approved
 #      ALERT_NEW: edited
 #      THRESHOLD: -2400
-      THRESHOLD: -400
+      THRESHOLD: -300
     timeout: 120
     events:
       - schedule:
@@ -88,7 +88,6 @@ functions:
     handler: handler.init_amara_teams
   get_stored_pages:
     handler: handler.get_stored_pages
-
 
 #    The following are a few example events you can configure
 #    NOTE: Please make sure to change your handler code to work with those events
