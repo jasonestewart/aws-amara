@@ -18,3 +18,5 @@ var/
 *.pyc
 # Serverless directories
 .serverless
+stats.txt
+
