@@ -64,19 +64,13 @@ custom:
     dockerizePip: non-linux
 
 functions:
-  hello:
-    handler: handler.hello
+  check_jobs:
+    handler: handler.check_jobs
     environment: # Function level environment variables
-      DEBUG: FALSE
-      LOCAL: FALSE
-#      DEBUG: TRUE
-#      LOCAL: TRUE
-#      URL: http://requestbin.fullcontact.com/y833sdy8
+      VERBOSE: TRUE
+      DEBUG: TRUE
+      LOCAL: TRUE
       PROFILE: FALSE
-#      ALERT_REVIEW: approved
-#      ALERT_NEW: edited
-#      THRESHOLD: -2400
-      THRESHOLD: -300
     timeout: 120
     events:
       - schedule:
