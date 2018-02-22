@@ -1,0 +1,1 @@
+jQuery.Rpc.addProvider({"url": "/en/teams/router/", "maxRetries": 0, "enableBuffer": true, "actions": {"TeamsApiV2": [{"name": "member_role_info"}, {"name": "save_role"}, {"name": "test_api"}], "TeamsApi": [{"name": "create_application"}, {"name": "promote_user"}]}})

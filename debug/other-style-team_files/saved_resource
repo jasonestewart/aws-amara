@@ -1,0 +1,1 @@
+jQuery.Rpc.addProvider({"url": "/en/profiles/router/", "maxRetries": 0, "enableBuffer": true, "actions": {"ProfileApi": [{"name": "fire_exception"}, {"name": "get_user_languages"}, {"name": "select_languages"}, {"name": "set_email"}]}})
