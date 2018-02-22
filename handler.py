@@ -1,182 +1,20 @@
 import json
-import itertools
 import boto3
 from aiohttp import ClientSession, TCPConnector
 import asyncio
 import os
 from datetime import datetime
-from bs4 import BeautifulSoup
-from html.parser import HTMLParser
 import cProfile
 import io
 import pstats
-from amara import AmaraUser, AmaraTask, AmaraTeam, AmaraJob
+from amara import AmaraUser, AmaraJob
+# from IPython import embed
 
 DEBUG = ""
+VERBOSE = ""
 DB = boto3.resource("dynamodb")
 LOCAL = False
 PROFILE = False
-
-# time cutoff for interesting events in seconds (10 minutes)
-TIME_THRESHOLD = -60 * 10
-
-
-async def auth_session_and_fetch_teams(session):
-    user = AmaraUser()
-
-    teams = []
-
-    if DEBUG:
-        teams.append(AmaraTeam("demand-465", "/en/teams/demand-465/"))
-        teams.append(AmaraTeam("ondemand060", "/en/teams/ondemand060/"))
-        teams.append(AmaraTeam("ondemand616", "/en/teams/ondemand616/"))
-        return teams
-
-    async with session.get(user.LOGIN_URL) as response:
-        await response.read()
-        crsf = response.cookies.get('csrftoken').value
-
-    auth = {
-        'csrfmiddlewaretoken' : crsf,
-        'username' : user.name,
-        'password' : user.password,
-    }
-    ref = {'referer' : user.LOGIN_URL}
-
-    async with session.post(user.POST_LOGIN_URL,
-                            data=auth,
-                            headers=ref) as response:
-
-        doc = await response.text()
-
-        soup = BeautifulSoup(doc, 'html.parser')
-        menu = soup.find(id='user-menu')
-
-        if menu is not None:
-            for candidate in menu.find_next_sibling('ul').find_all('a'):
-
-                if not candidate['href'].startswith('/en/teams/'):
-                    continue
-
-                name = candidate['href'].split('/')[-2]
-
-                if name == 'my':  # Ignore the paged teams listings link.
-                    continue
-
-                teams.append(AmaraTeam(name, candidate['href']))
-
-        return teams
-
-
-class HTMLFinished(Exception):
-    def __init__(self, *args, **kwargs):
-        Exception.__init__(self, *args, **kwargs)
-
-
-class MyHTMLParser(HTMLParser):
-    WAITING = 1
-    IN_ACT_LIST = 2
-    IN_TIME = 3
-
-    def __init__(self, team):
-        self.tasks = []
-        self.cur_task = None
-        self._state = self.WAITING
-        self._seen_author = False
-        self.team = team
-        super().__init__()
-
-    def handle_starttag(self, tag, attrs):
-        if tag == 'p':
-            return
-
-        if self._state == self.IN_ACT_LIST:
-            if tag == 'li':
-                self.cur_task = AmaraTask(self.team)
-            elif tag == 'span':
-                self._state = self.IN_TIME
-            elif tag == 'a':
-                if self._seen_author:
-                    attr_dict = dict(attrs)
-                    self.cur_task.set_video_url(attr_dict['href'])
-                else:
-                    self._seen_author = True
-        elif tag == "div":
-            attr_dict = dict(attrs)
-            if 'id' not in attr_dict:
-                return
-            elif attr_dict['id'] == 'activity-list':
-                self._state = self.IN_ACT_LIST
-
-    def handle_endtag(self, tag):
-        if tag == 'p':
-            return
-
-        if self._state == self.IN_ACT_LIST:
-            if tag == 'ul':
-                raise HTMLFinished()
-        elif self._state == self.IN_TIME:
-            if tag == 'span':
-                self._state = self.IN_ACT_LIST
-                self.cur_task.set_delta()
-                if self.cur_task.delta.total_seconds() < TIME_THRESHOLD:
-                    raise HTMLFinished()
-                else:
-                    self.tasks.append(self.cur_task)
-
-    def handle_data(self, data):
-        if self.cur_task is not None:
-            self.cur_task.text += data
-
-        if self._state == self.IN_TIME:
-            self.cur_task.time += data
-
-
-async def fetch_team_activities(url, team, session):
-    if DEBUG:
-        a = []
-        time = "2 minutes ago"
-        if "465" in team.name:
-            task = AmaraTask(team,
-                             "https://amara.org/en/teams/demand-465/activity/",
-                             time,
-                             "\n2 minutes ago\n\nOmnia Kamel\n  endorsed English subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4 (transcriber)\n\n"
-            )
-            task.set_video_url('/en/videos/oZSRr0kN6GE2/info/etc_layla_arabic_subs_sl_170719mp4/')
-            task.set_delta()
-            a.append(task)
-        elif "616" in team.name:
-            task = AmaraTask(team,
-                             "https://amara.org/en/teams/ondemand616/activity/",
-                             time,
-                             "\n2 minutes ago\n\nign_api added a video: Fe Review\n\n"
-            )
-            task.set_video_url('/en/videos/CFxLYlgjS67T/info/fe-review/?team=ondemand616')
-            task.set_delta()
-            a.append(task)
-        else:
-            task = AmaraTask(team,
-                             "https://amara.org/en/teams/ondemand060/activity/",
-                             time,
-                             "\n2 minutes ago\n\nOmnia Kamel\n  endrosed English subtitles for ETC_Layla_Arabic_SUBS_SL_170719.mp4 (transcriber)\n\n"
-            )
-            task.set_video_url('/en/videos/8wxNgiJyLY0H/info/wwwyoutubecomwatchvgi1al50hxg8/?team=ondemand060')
-            task.set_delta()
-            a.append(task)
-
-        return a
-
-    async with session.get(url) as response:
-
-        doc = await response.text()
-        # soup = BeautifulSoup(doc, 'html.parser')
-        # activity = soup.find(id='activity-list')
-        p = MyHTMLParser(team)
-        try:
-            p.feed(doc)
-        except HTMLFinished:
-            pass
-        return p.tasks
 
 
 def update_team(table, team):
@@ -256,49 +94,56 @@ def init_amara_teams(event, context):
     return response
 
 
-async def check_amara_teams():
-    async with ClientSession() as session:
-        teams = await auth_session_and_fetch_teams(session)
-        return teams
-
-
 def get_amara_init_info():
+    global VERBOSE
     global DEBUG
     global LOCAL
     global PROFILE
-    global TIME_THRESHOLD
+
+    verbose = os.getenv('VERBOSE', "FALSE")
+    if verbose.upper() == "FALSE":
+        VERBOSE = False
+        print("VERBOSE is false\n")
+    else:
+        print("VERBOSE is true\n")
+        VERBOSE = True
 
     debug = os.getenv('DEBUG', "FALSE")
     if debug.upper() == "FALSE":
         DEBUG = False
-        print("DEBUG is false\n")
+        if verbose:
+            print("DEBUG is false\n")
     else:
-        print("DEBUG is true\n")
+        if verbose:
+            print("DEBUG is true\n")
         DEBUG = True
 
     local = os.getenv('LOCAL', "FALSE")
     if local.upper() == "FALSE":
         LOCAL = False
-        print("LOCAL is false\n")
+        if verbose:
+            print("LOCAL is false\n")
     else:
         LOCAL = True
-        print("LOCAL is true\n")
+        if verbose:
+            print("LOCAL is true\n")
 
     profile = os.getenv('PROFILE', "FALSE")
     if profile.upper() == "FALSE":
         PROFILE = False
-        print("PROFILE is false\n")
+        if verbose:
+            print("PROFILE is false\n")
     else:
         PROFILE = True
-        print("PROFILE is true\n")
+        if verbose:
+            print("PROFILE is true\n")
 
-    TIME_THRESHOLD = int(os.getenv('THRESHOLD', TIME_THRESHOLD))
-    print("Found THRESHOLD: {}\n".format(TIME_THRESHOLD))
-
-    AmaraTask.DEBUG = DEBUG
     AmaraUser.DEBUG = DEBUG
-    AmaraJob.DEBUG = DEBUG
-    AmaraTask.init_tasks()
+    AmaraJob.DEBUG  = DEBUG
+    AmaraUser.VERBOSE = VERBOSE
+    AmaraJob.VERBOSE  = VERBOSE
+    AmaraUser.LOCAL = LOCAL
+    AmaraJob.LOCAL  = LOCAL
 
 
 def get_stored_pages(event, context):
@@ -323,19 +168,26 @@ def get_stored_pages(event, context):
     return response
 
 
+async def check_amara_teams():
+    async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+        await AmaraUser.init(session)
+        user = AmaraUser()
+        return user.get_current_jobs(), user.teams
+
+
 def check_teams(event, context):
     get_amara_init_info()
 
     loop = asyncio.get_event_loop()
     future = asyncio.ensure_future(check_amara_teams())
-    teams = loop.run_until_complete(future)
+    jobs, teams = loop.run_until_complete(future)
 
-    result = update_teams(teams)
+    # result = update_teams(teams)
 
-    message = "Total teams to scrape: {}\n".format(len(teams))
+    message = "Current jobs: {}\n".format(jobs)
+    message += "Found teams: {}\n".format(len(teams))
     body = {
         "message" : message,
-        "result"  : result,
     }
 
     response = {
@@ -346,50 +198,38 @@ def check_teams(event, context):
     return response
 
 
-async def bound_fetch(sem, url, team, session):
+async def bound_fetch(sem, team, user):
     async with sem:
-        return await fetch_team_activities(url, team, session)
+        return await user.check_for_new_jobs(team)
 
 
-async def run_task_checks():
-    tasks = []
+async def run_job_checks():
     sem = asyncio.Semaphore(200)
 
     # Create client session that will ensure we dont open new connection
     # per each request.
     async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+        await AmaraUser.init(session)
+        user = AmaraUser()
+        teams = user.teams
 
-        teams = await auth_session_and_fetch_teams(session)
+        if DEBUG and LOCAL:
+            teams = AmaraUser.debug_teams()
+        if VERBOSE:
+            print("Total teams to scrape: {}\n".format(len(teams)))
 
-        print("Total teams to scrape: {}\n".format(len(teams)))
-
-        for team in teams:
-            url = team.make_url()
-            task = asyncio.ensure_future(bound_fetch(sem, url, team, session))
+        tasks = []
+        for team in teams.values():
+            task = asyncio.ensure_future(bound_fetch(sem, team, user))
             tasks.append(task)
 
         # Gather all futures
         tasks = asyncio.gather(*tasks)
-
-        # Flatten nested activities
-        tasks = list(itertools.chain(*await tasks))
-
-        print("Found tasks: {}\n".format(tasks))
-
-        # Filter by terms
-        jobs = []
-        for task in tasks:
-            job = task.filter()
-            if job:
-                jobs.append(job)
-
-        print("Found jobs: {}\n".format(jobs))
-
-        if jobs:
-            await AmaraJob.handle_jobs(session, jobs)
+        await tasks
+        await user.handle_jobs()
 
 
-def hello(event, context):
+def check_jobs(event, context):
     get_amara_init_info()
 
     if LOCAL:
@@ -400,7 +240,7 @@ def hello(event, context):
         pr.enable()
 
     loop = asyncio.get_event_loop()
-    future = asyncio.ensure_future(run_task_checks())
+    future = asyncio.ensure_future(run_job_checks())
     loop.run_until_complete(future)
 
     if PROFILE:
@@ -409,7 +249,8 @@ def hello(event, context):
         sortby = 'cumulative'
         ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
         ps.print_stats()
-        print(s.getvalue())
+        with open('stats.txt', 'w') as f:
+            f.write(s.getvalue())
 
     if LOCAL:
         print(datetime.now())
