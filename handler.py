@@ -9,7 +9,7 @@ import io
 import pstats
 from amara import AmaraUser, AmaraJob
 import logging
-from IPython import embed
+# from IPython import embed
 
 DEBUG = ""
 VERBOSE = ""
@@ -18,6 +18,7 @@ LOCAL = False
 PROFILE = False
 
 logger = None
+
 
 def update_team(table, team):
     table.put_item(
@@ -119,32 +120,31 @@ def get_amara_init_info():
     root = logging.getLogger()
     root.handlers[0].setFormatter(formatter)
 
-
     logger.info("LOGLEVEL set to %s", loglevel)
 
     debug = os.getenv('DEBUG', "FALSE")
     if debug.upper() == "FALSE":
         DEBUG = False
-        logger.info("DEBUG is false\n")
+        logger.info("DEBUG is false")
     else:
-        logger.info("DEBUG is true\n")
+        logger.info("DEBUG is true")
         DEBUG = True
 
     local = os.getenv('LOCAL', "FALSE")
     if local.upper() == "FALSE":
         LOCAL = False
-        logger.info("LOCAL is false\n")
+        logger.info("LOCAL is false")
     else:
         LOCAL = True
-        logger.info("LOCAL is true\n")
+        logger.info("LOCAL is true")
 
     profile = os.getenv('PROFILE', "FALSE")
     if profile.upper() == "FALSE":
         PROFILE = False
-        logger.info("PROFILE is false\n")
+        logger.info("PROFILE is false")
     else:
         PROFILE = True
-        logger.info("PROFILE is true\n")
+        logger.info("PROFILE is true")
 
     AmaraUser.DEBUG = DEBUG
     AmaraJob.DEBUG  = DEBUG
@@ -223,7 +223,7 @@ async def run_job_checks():
         if DEBUG and LOCAL:
             teams = AmaraUser.debug_teams()
 
-        logger.info("Total teams to scrape: {}\n".format(len(teams)))
+        logger.info("Total teams to scrape: %i", len(teams))
 
         tasks = []
         for team in teams.values():
