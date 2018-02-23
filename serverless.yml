@@ -54,6 +54,8 @@ package:
 #    - exclude-me.py
 #    - __pycache__/**
    - stats.txt
+   - .flake8
+   - README.md
    - debug/**
     
 plugins:
@@ -67,8 +69,7 @@ functions:
   check_jobs:
     handler: handler.check_jobs
     environment: # Function level environment variables
-      VERBOSE: TRUE
-      DEBUG: FALSE
+      DEBUG: TRUE
       LOCAL: TRUE
       PROFILE: FALSE
       LOGLEVEL: DEBUG
