@@ -1,6 +1,8 @@
 import boto3
 from botocore.exceptions import ClientError
+import logging
 
+logger = logging.getLogger('amara-handler.{}'.format(__name__))
 
 class SESEmail(object):
     """Class to encapsulate sending SES emails"""
@@ -46,7 +48,6 @@ class SESEmail(object):
             )
         # Display an error if something goes wrong.
         except ClientError as e:
-            print(e.response['Error']['Message'])
+            logger.exception("Couldn't send email")
         else:
-            print("Email sent! Message ID:"),
-            print(response['ResponseMetadata']['RequestId'])
+            logger.info("Email sent! Message ID: %s", response['ResponseMetadata']['RequestId'])
