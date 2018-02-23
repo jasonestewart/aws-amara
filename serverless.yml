@@ -53,8 +53,8 @@ package:
   exclude:
 #    - exclude-me.py
 #    - __pycache__/**
-#    - .gitignore
-#    - venv/**
+   - stats.txt
+   - debug/**
     
 plugins:
   - serverless-python-requirements
@@ -68,9 +68,10 @@ functions:
     handler: handler.check_jobs
     environment: # Function level environment variables
       VERBOSE: TRUE
-      DEBUG: TRUE
+      DEBUG: FALSE
       LOCAL: TRUE
       PROFILE: FALSE
+      LOGLEVEL: DEBUG
     timeout: 120
     events:
       - schedule:
