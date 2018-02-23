@@ -99,14 +99,13 @@ class AmaraJob(object):
         if self.DEBUG and self.LOCAL:
             self.logger.info("handle: %s", 'adding debug assignments')
             tree = None
-            if self.team.name is 'ondemand808':
+            if self.team.name == 'ondemand808':
                 tree = html.parse("debug/808-handle-two-transcription-jobs.htm")
-            elif self.team.name is 'ondemand616':
+            elif self.team.name == 'ondemand616':
                 tree = html.parse("debug/616-handle-one-transcription-job.htm")
-            elif self.team.name is 'ondemand212':
+            elif self.team.name == 'ondemand212':
                 tree = html.parse("debug/212-handle-one-review-job.htm")
-            elif self.team.name.startswith('ondemand427'):
-                self.logger.debug("handle: bogus team name: %s", self.team)
+            elif self.team.name == 'ondemand427-english-team':
                 tree = html.parse("debug/427-handle-4-transcription-jobs.htm")
             root = tree.getroot()
         else:
@@ -131,7 +130,7 @@ class AmaraJob(object):
 
             self.logger.info("handle: %s", 'starting auto-join')
             async with session.post(url) as response:
-                if response.status is not '200':
+                if response.status != '200':
                     self.logger.error("error while joining: %s, status: %s, headers: %s",
                         url, response.status, response.headers)
                 else:
@@ -218,6 +217,10 @@ class AmaraUser(object):
     async def handle_jobs(self):
         self.logger.info("handle_jobs: %s", 'start')
 
+        if not self.available_jobs:
+            self.logger.info("handle_jobs: no available jobs: %s", 'exit')
+            return
+
         def curr_job_filter(new, curr_jobs):
             result = list(filter(lambda curr: curr.team.name == new.team.name and curr.type == new.type,
                                  curr_jobs))
@@ -227,16 +230,16 @@ class AmaraUser(object):
             self.logger.debug("job_filter: action: {}, new job: {}".format(action, new))
             return not result
 
-        self.logger.debug("handle_jobs: available jobs: %s\n\t",
+        self.logger.debug("handle_jobs: available jobs: \n\t%s",
             "\n\t".join(map(str, self.available_jobs)))
 
-        self.logger.debug("handle_jobs: current jobs: %s\n\t",
+        self.logger.debug("handle_jobs: current jobs: \n\t%s",
             "\n\t".join(map(str, self.get_current_jobs())))
 
         jobs = list(filter(lambda j: curr_job_filter(j, self.get_current_jobs()), 
                            self.available_jobs))
 
-        self.logger.debug("handle_jobs: new jobs: %s\n\t",
+        self.logger.debug("handle_jobs: new jobs: \n\t%s",
             "\n\t".join(map(str, jobs)))
 
         for job in jobs:
@@ -366,7 +369,7 @@ class AmaraUser(object):
                     return
                 current_jobs.append(job)
 
-        self.logger.info("fetch_current_jobs: Found jobs: %s\n\t",
+        self.logger.info("fetch_current_jobs: Found jobs: \n\t%s",
             "\n\t".join(map(str,current_jobs)))
         self.logger.info("fetch_current_jobs: %s", 'end')
         return current_jobs
@@ -400,15 +403,15 @@ class AmaraUser(object):
         if self.DEBUG and self.LOCAL:
             self.logger.debug("check_for_new_jobs: debug for team: %s", team.name)
             filename = ''
-            if team.name is 'ondemand808':
+            if team.name == 'ondemand808':
                 filename = "debug/808-2-available-transcription-assignments.htm"
-            elif team.name is 'ondemand043':
+            elif team.name == 'ondemand043':
                 filename = "debug/043-no-assignments.htm"
-            elif team.name is 'ondemand212':
+            elif team.name == 'ondemand212':
                 filename = "debug/212-one-available-review-assignment.htm"
-            elif team.name.startswith('ondemand427'):
+            elif team.name == 'ondemand427-english-team':
                 filename = "debug/427-4-available-transcription-assignments.htm"
-            elif team.name is 'ondemand616':
+            elif team.name == 'ondemand616':
                 filename = "debug/616-one-available-transcription-assignment.htm"
             tree = html.parse(filename)
             root = tree.getroot()
