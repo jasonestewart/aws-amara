@@ -110,8 +110,15 @@ class AmaraJob(object):
             root = tree.getroot()
         else:
             self.logger.info("handle: %s", 'fetching assignment')
-
-            response = await session.post(self.url)
+            ref = {'referer' : self.team.url}
+            # crsf = response.cookies.get('csrftoken').value
+            user = AmaraUser()
+#             auth = {
+#                 'csrfmiddlewaretoken' : crsf,
+#                 'username' : self.name,
+#                 'password' : self.password,
+#             }
+            response = await session.post(self.url, data=user.auth, headers=ref)
             doc = await response.text()
             root = html.fromstring(doc)
 
@@ -129,10 +136,13 @@ class AmaraJob(object):
                 return
 
             self.logger.info("handle: %s", 'starting auto-join')
-            async with session.post(url) as response:
-                if response.status != '200':
-                    self.logger.error("error while joining: %s, status: %s, headers: %s",
-                        url, response.status, response.headers)
+            
+            ref = {'referer' : self.url}
+            async with session.post(url, data=user.auth, headers=ref) as response:
+                if response.status != 200:
+                    text = await response.text()
+                    self.logger.error("error while joining: %s, status: %s, headers: %s, text: %s",
+                        url, response.status, response.headers, text)
                 else:
                     self.logger.info("handle: join success, adding job: %s", self)
                     user = AmaraUser()
@@ -254,7 +264,7 @@ class AmaraUser(object):
         async with self.__session.get(self.LOGIN_URL) as response:
             await response.read()
             crsf = response.cookies.get('csrftoken').value
-        auth = {
+        self.auth = {
             'csrfmiddlewaretoken' : crsf,
             'username' : self.name,
             'password' : self.password,
@@ -262,7 +272,7 @@ class AmaraUser(object):
         ref = {'referer' : self.LOGIN_URL}
 
         self.logger.info("auth_session: %s", 'end')
-        return await self.__session.post(self.POST_LOGIN_URL, data=auth, headers=ref)
+        return await self.__session.post(self.POST_LOGIN_URL, data=self.auth, headers=ref)
 
     def fetch_teams(self, doc):
         self.logger.info("fetch_teams: %s", 'start')
@@ -349,7 +359,6 @@ class AmaraUser(object):
             doc = await response.text()
             root = html.fromstring(doc)
 
-        # embed()
         divs = root.findall(".//div[@class='section']")
         # divs[0] is the first div, divs[0][0] is the child of the div
         # <div><h3>Available assignments</h3>
@@ -382,14 +391,12 @@ class AmaraUser(object):
         def parse_collaboration(r, class_):
             job = False
             xpath = ".//li[@class='{}']".format(class_)
-            # embed()
             e = r.find(xpath)
             if e is None:  # ERROR!!
                 self.logger.warn('searching for jobs, no <li class=%s>, team: %s', class_, team.name)
                 return False
 
             e = e.find(".//span")
-
             # <span class="total">1</span> - shows how many jobs available
             if int(e.text) > 0:
                 # there are jobs
@@ -439,9 +446,19 @@ class AmaraUser(object):
         self.logger.info("check_for_new_jobs: found jobs for team: %s", team.name)
 
         # there are jobs, find out if they are review or transcription
+        e = root.find(".//div[@class='availableCollabs']")
+        if e is None:
+            self.logger.warn("skipping bad html team: %s", team.name)
+            return
+        
+        o = e.find(".//option")
+        if o is None:
+            self.logger.warn("skipping bad html team: %s", team.name)
+            return
+        
         for type in ['transcribe', 'review']:
-            class_ = 'availableCollabs-' + type
-            if parse_collaboration(root, class_):
+            val = 'data-{}-count'.format(type)
+            if int(o.attrib[val]) > 0:
                 job = None
                 if type == 'transcribe':
                     job = AmaraTranscriptionJob(team)
