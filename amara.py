@@ -12,6 +12,7 @@ BASE_URL = "https://amara.org"
 
 module_logger = logging.getLogger('amara-handler.{}'.format(__name__))
 
+
 class AmaraTask(object):
     """Class for encapsulating Tasks on Amara.org"""
 
@@ -66,6 +67,8 @@ class AmaraJob(object):
             )
 
     def send_email(self):
+        self.logger.info("send_email: %s", 'start')
+
         # await self.save_page(session)
         team = self.team
 
@@ -85,19 +88,30 @@ class AmaraJob(object):
                    url=self.url,
                    team_url=team.url)
         email.send_email()
+        self.logger.info("send_email: %s", 'end')
 
     async def handle(self, session):
+        self.logger.info("handle: %s", 'start')
+
+        self.logger.debug("handle: self: %s", self)
+
         root = None
         if self.DEBUG and self.LOCAL:
+            self.logger.info("handle: %s", 'adding debug assignments')
+            tree = None
             if self.team.name is 'ondemand808':
-                root = html.parse("debug/808-handle-two-transcription-jobs.htm")
+                tree = html.parse("debug/808-handle-two-transcription-jobs.htm")
             elif self.team.name is 'ondemand616':
-                root = html.parse("debug/transcribe-job.htm")
+                tree = html.parse("debug/616-handle-one-transcription-job.htm")
             elif self.team.name is 'ondemand212':
-                root = html.parse("debug/212-handle-one-review-job.htm")
-            elif self.team.name is 'ondemand427-english-team':
-                root = html.parse("debug/427-handle-4-transcription-jobs.htm")
+                tree = html.parse("debug/212-handle-one-review-job.htm")
+            elif self.team.name.startswith('ondemand427'):
+                self.logger.debug("handle: bogus team name: %s", self.team)
+                tree = html.parse("debug/427-handle-4-transcription-jobs.htm")
+            root = tree.getroot()
         else:
+            self.logger.info("handle: %s", 'fetching assignment')
+
             response = await session.post(self.url)
             doc = await response.text()
             root = html.fromstring(doc)
@@ -112,14 +126,19 @@ class AmaraJob(object):
             self.send_email()
 
             if self.DEBUG and self.LOCAL:
+                self.logger.info("handle: %s", 'debug exit')
                 return
 
+            self.logger.info("handle: %s", 'starting auto-join')
             async with session.post(url) as response:
                 if response.status is not '200':
-                    self.logger.error("error while joining: {}, status: {}\nheaders: {}".format(url, response.status, response.headers))
+                    self.logger.error("error while joining: %s, status: %s, headers: %s",
+                        url, response.status, response.headers)
                 else:
+                    self.logger.info("handle: join success, adding job: %s", self)
                     user = AmaraUser()
                     user.add_new_job(self)
+        self.logger.info("handle: %s", 'end')
 
 
 class AmaraReviewJob(AmaraJob):
@@ -172,6 +191,7 @@ class AmaraUser(object):
 
     @staticmethod
     def debug_teams():
+        module_logger.info("AmaraUser: debug_teams")
         return {'ondemand808': AmaraTeam('ondemand808'),
                 'ondemand043': AmaraTeam('ondemand043'),
                 'ondemand616': AmaraTeam('ondemand616'),
@@ -181,43 +201,53 @@ class AmaraUser(object):
 
     def __init__(self):
         self.logger = logging.getLogger("amara-handler.{}.AmaraUser".format(__name__))
-        self.logger.debug("AmaraUser: __init__()")
+        self.logger.info("__init__: %s", 'end')
 
     def __new__(cls):
-        module_logger.info("AmaraUser: __new__()\n")
+        module_logger.info("AmaraUser.__new__")
         if cls.__instance is None:
+            module_logger.info("AmaraUser.__new__: %s", 'creating singleton')
             cls.__instance = object.__new__(cls)
             login = cls.__get_db_user()
             cls.__instance.name = login['user']
             cls.__instance.password = login['pass']
             cls.__instance.current_jobs = None
-            cls.__instance.available_jobs = None
+            cls.__instance.available_jobs = []
         return cls.__instance
 
     async def handle_jobs(self):
         self.logger.info("handle_jobs: %s", 'start')
 
-        def curr_job_filter(curr, new):
-            cond = curr.team.name == new.team.name and curr.type == new.type
+        def curr_job_filter(new, curr_jobs):
+            result = list(filter(lambda curr: curr.team.name == new.team.name and curr.type == new.type,
+                                 curr_jobs))
             action = 'accepting'
-            if cond:
+            if result:
                 action = 'rejecting'
-            self.logger.debug("AmaraUser.job_filter: action: {}, curr_job: {}, new job: {}".format(action, curr, new))
-            return cond
+            self.logger.debug("job_filter: action: {}, new job: {}".format(action, new))
+            return not result
 
-        self.logger.debug("AmaraUser.handle_jobs: available jobs: {}".format(self.available_jobs))
+        self.logger.debug("handle_jobs: available jobs: %s\n\t",
+            "\n\t".join(map(str, self.available_jobs)))
 
-        if self.available_jobs is not None:
-            for job in self.available_jobs:
-                curr_jobs = self.get_current_jobs()
-                matches = list(filter(lambda j: curr_job_filter(j, job), curr_jobs))
-                if not matches:
-                    self.logger.debug("AmaraUser.handle_jobs: Found new job: {}".format(job))
-                    await job.handle(self.__session)
-                else:
-                    self.logger.debug("AmaraUser.handle_jobs: axed new job: {}".format(job))
+        self.logger.debug("handle_jobs: current jobs: %s\n\t",
+            "\n\t".join(map(str, self.get_current_jobs())))
+
+        jobs = list(filter(lambda j: curr_job_filter(j, self.get_current_jobs()), 
+                           self.available_jobs))
+
+        self.logger.debug("handle_jobs: new jobs: %s\n\t",
+            "\n\t".join(map(str, jobs)))
+
+        for job in jobs:
+            self.logger.debug("handle_jobs: Found new job: %s", job)
+            await job.handle(self.__session)
+
+        self.logger.info("handle_jobs: %s", 'end')
 
     async def auth_session(self):
+        self.logger.info("auth_session: %s", 'start')
+
         async with self.__session.get(self.LOGIN_URL) as response:
             await response.read()
             crsf = response.cookies.get('csrftoken').value
@@ -227,9 +257,13 @@ class AmaraUser(object):
             'password' : self.password,
         }
         ref = {'referer' : self.LOGIN_URL}
+
+        self.logger.info("auth_session: %s", 'end')
         return await self.__session.post(self.POST_LOGIN_URL, data=auth, headers=ref)
 
     def fetch_teams(self, doc):
+        self.logger.info("fetch_teams: %s", 'start')
+
         teams = []
         root = html.fromstring(doc)
         menu = root.get_element_by_id('user-menu')
@@ -246,12 +280,13 @@ class AmaraUser(object):
                     continue
 
                 teams.append(AmaraTeam(name, href))
-        self.logger.debug("AmaraUser.fetch_teams: Found: {} teams".format(len(teams)))
+        self.logger.info("fetch_teams: Found: %i teams", len(teams))
+        self.logger.info("fetch_teams: %s", 'end')
         return teams
 
     @classmethod
     async def init(cls, session):
-        logging.debug("AmaraUser: init()\n")
+        module_logger.debug("AmaraUser.init: %s", 'start')
 
         # I know this is weird but __new__ has to be called first
         user = AmaraUser()
@@ -265,28 +300,34 @@ class AmaraUser(object):
             dict[team.name] = team
         user.teams = dict
         user.current_jobs = await user.fetch_current_jobs()
+        module_logger.debug("AmaraUser.init: %s", 'end')
 
     @staticmethod
     def __get_db_user():
+        module_logger.debug("AmaraUser.__get_db_user: %s", 'start')
         user = DB.Table("user")
         response = user.get_item(Key={"service_name" : "amara"})
+        module_logger.debug("AmaraUser.__get_db_user: %s", 'end')
         return response["Item"]
 
     def add_available_job(self, job):
-        if self.available_jobs is None:
-            self.available_jobs = []
+        self.logger.info("add_available_jobs: %s", 'start')
         self.available_jobs.append(job)
+        self.logger.info("add_available_jobs: %s", 'end')
 
     def add_new_job(self, job):
+        self.logger.info("add_new_job: %s", 'start')
         if self.current_jobs is None:
-            self.logger.error("AmaraUser.add_new_job called before current jobs set")
+            self.logger.error("add_new_job: called before current jobs set")
         else:
             self.current_jobs.append(job)
+        self.logger.info("add_new_job: %s", 'end')
 
     def get_current_jobs(self):
         return self.current_jobs
 
     async def fetch_current_jobs(self):
+        self.logger.info("fetch_current_jobs: %s", 'start')
 
         def team_from_html(node):
             # node is of form: <li><a href='...'></a>
@@ -320,12 +361,14 @@ class AmaraUser(object):
                 elif b"Subtitler" in html.tostring(curr_job):
                     job = AmaraTranscriptionJob(team_from_html(curr_job))
                 else:
-                    self.logger.error("Error: AmaraUser.fetch_current_jobs: didn't find Reviewer or Subtitler{}".format(html.tostring(curr_job)))
+                    self.logger.error("fetch_current_jobs: no Reviewer or Subtitler: %s",
+                        html.tostring(curr_job))
                     return
                 current_jobs.append(job)
 
-        self.logger.debug("AmaraUser.fetch_current_jobs: Found jobs: {}".format(current_jobs))
-
+        self.logger.info("fetch_current_jobs: Found jobs: %s\n\t",
+            "\n\t".join(map(str,current_jobs)))
+        self.logger.info("fetch_current_jobs: %s", 'end')
         return current_jobs
 
     async def check_for_new_jobs(self, team):
@@ -339,7 +382,7 @@ class AmaraUser(object):
             # embed()
             e = r.find(xpath)
             if e is None:  # ERROR!!
-                self.logger.error('searching for jobs, no <li class={}>, team: {}'.format(class_, team.name))
+                self.logger.warn('searching for jobs, no <li class=%s>, team: %s', class_, team.name)
                 return False
 
             e = e.find(".//span")
@@ -355,7 +398,7 @@ class AmaraUser(object):
         root = html.fromstring(doc)
 
         if self.DEBUG and self.LOCAL:
-            self.logger.debug("AmaraUser.check_for_new_jobs: debug for team: {}".format(team.name))
+            self.logger.debug("check_for_new_jobs: debug for team: %s", team.name)
             filename = ''
             if team.name is 'ondemand808':
                 filename = "debug/808-2-available-transcription-assignments.htm"
@@ -377,20 +420,20 @@ class AmaraUser(object):
         # so we look for that and return if it exists
         body = root.find(".//body[@class='v1 team_dashboard']")
         if body is not None:  # if it exists, this is an old-style team, skip it
-            self.logger.debug("skipping old style team: {}".format(team.url))
+            self.logger.warn("skipping old style team: %s", team.url)
             return
 
-        self.logger.debug("Jobs for team: {}".format(team.name))
+        self.logger.debug("check_for_new_jobs: new-style team: %s", team.name)
 
         # when a team has available jobs there will be a div
         # <div id=available_assignments></div>
         try:
             root.get_element_by_id("available_assignments")
         except KeyError:  # if the div does not exist, there are no jobs
-            self.logger.debug("\tno jobs for team: {}".format(team.name))
+            self.logger.debug("\tno jobs for team: %s", team.name)
             return
 
-        self.logger.debug("\tfound jobs for team: {}".format(team.name))
+        self.logger.info("check_for_new_jobs: found jobs for team: %s", team.name)
 
         # there are jobs, find out if they are review or transcription
         for type in ['transcribe', 'review']:
@@ -402,7 +445,8 @@ class AmaraUser(object):
                 else:
                     job = AmaraReviewJob(team)
 
-                self.logger.debug("\t\tfound {} for team: {}".format(type, team.name))
+                self.logger.debug("\t\tfound %s for team: %s", type, team.name)
 
                 self.add_available_job(job)
-            self.logger.debug("\t\tno {} jobs for team: {}".format(type, team.name))
+            else:
+                self.logger.debug("\t\tno %s jobs for team: %s", type, team.name)
