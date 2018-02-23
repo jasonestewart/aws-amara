@@ -19,4 +19,4 @@ var/
 # Serverless directories
 .serverless
 stats.txt
-
+check-jobs.log
