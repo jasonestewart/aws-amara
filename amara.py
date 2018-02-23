@@ -3,13 +3,14 @@ import re
 from SESEmail import SESEmail
 from datetime import datetime
 from lxml import html
+import logging
 # from IPython import embed
 
 AWS_REGION = "us-east-1"
-
 DB = boto3.resource("dynamodb", region_name=AWS_REGION)
 BASE_URL = "https://amara.org"
 
+module_logger = logging.getLogger('amara-handler.{}'.format(__name__))
 
 class AmaraTask(object):
     """Class for encapsulating Tasks on Amara.org"""
@@ -42,11 +43,13 @@ class AmaraJob(object):
 
     LOCAL = False
     DEBUG = False
-    VERBOSE = False
     AUTO_JOIN_JOBS = False
 
     EDITOR_URL = "/en/subtitles/editor/"
     JOB_URL_TEMPLATE = BASE_URL + EDITOR_URL + "{}/en/?team={}"
+
+    def __init__(self):
+        self.logger = logging.getLogger("amara-handler.{}.AmaraJob".format(__name__))
 
     async def save_page(self, session):
         async with session.get(self.task.video_url) as response:
@@ -113,7 +116,7 @@ class AmaraJob(object):
 
             async with session.post(url) as response:
                 if response.status is not '200':
-                    print("error while joining: {}, status: {}\nheaders: {}".format(url, response.status, response.headers))
+                    self.logger.error("error while joining: {}, status: {}\nheaders: {}".format(url, response.status, response.headers))
                 else:
                     user = AmaraUser()
                     user.add_new_job(self)
@@ -130,6 +133,7 @@ class AmaraReviewJob(AmaraJob):
     def __init__(self, team):
         self.type = 'review'
         self.team = team
+        self.logger = logging.getLogger("amara-handler.{}.AmaraReviewJob".format(__name__))
         self.url = BASE_URL + self.REVIEW_ASS_TEMPLATE.format(team.name)
 
     def __repr__(self):
@@ -146,6 +150,7 @@ class AmaraTranscriptionJob(AmaraJob):
     def __init__(self, team):
         self.type = 'transcription'
         self.team = team
+        self.logger = logging.getLogger("amara-handler.{}.AmaraTranscriptionJob".format(__name__))
         self.url = BASE_URL + self.TRANSCRIBE_ASS_TEMPLATE.format(team.name)
 
     def __repr__(self):
@@ -157,7 +162,6 @@ class AmaraUser(object):
 
     LOCAL = False
     DEBUG = False
-    VERBOSE = False
 
     LOGIN_URL      = BASE_URL + "/en/auth/login/?next=/"
     POST_LOGIN_URL = BASE_URL + "/en/auth/login_post/"
@@ -176,12 +180,11 @@ class AmaraUser(object):
         }
 
     def __init__(self):
-        if self.VERBOSE:
-            print("AmaraUser: __init__()\n")
+        self.logger = logging.getLogger("amara-handler.{}.AmaraUser".format(__name__))
+        self.logger.debug("AmaraUser: __init__()")
 
     def __new__(cls):
-        if cls.VERBOSE:
-            print("AmaraUser: __new__()\n")
+        module_logger.info("AmaraUser: __new__()\n")
         if cls.__instance is None:
             cls.__instance = object.__new__(cls)
             login = cls.__get_db_user()
@@ -192,31 +195,27 @@ class AmaraUser(object):
         return cls.__instance
 
     async def handle_jobs(self):
-        if self.VERBOSE:
-            print("AmaraUser.handle_jobs")
+        self.logger.info("handle_jobs: %s", 'start')
 
         def curr_job_filter(curr, new):
             cond = curr.team.name == new.team.name and curr.type == new.type
             action = 'accepting'
             if cond:
                 action = 'rejecting'
-            if self.VERBOSE:
-                print("AmaraUser.job_filter: action: {}, curr_job: {}, new job: {}".format(action, curr, new))
+            self.logger.debug("AmaraUser.job_filter: action: {}, curr_job: {}, new job: {}".format(action, curr, new))
             return cond
 
-        if self.VERBOSE:
-            print("AmaraUser.handle_jobs: available jobs: {}".format(self.available_jobs))
+        self.logger.debug("AmaraUser.handle_jobs: available jobs: {}".format(self.available_jobs))
 
-        for job in self.available_jobs:
-            curr_jobs = self.get_current_jobs()
-            matches = list(filter(lambda j: curr_job_filter(j, job), curr_jobs))
-            if not matches:
-                if self.VERBOSE:
-                    print("AmaraUser.handle_jobs: Found new job: {}".format(job))
-                await job.handle(self.__session)
-            else:
-                if self.VERBOSE:
-                    print("AmaraUser.handle_jobs: axed new job: {}".format(job))
+        if self.available_jobs is not None:
+            for job in self.available_jobs:
+                curr_jobs = self.get_current_jobs()
+                matches = list(filter(lambda j: curr_job_filter(j, job), curr_jobs))
+                if not matches:
+                    self.logger.debug("AmaraUser.handle_jobs: Found new job: {}".format(job))
+                    await job.handle(self.__session)
+                else:
+                    self.logger.debug("AmaraUser.handle_jobs: axed new job: {}".format(job))
 
     async def auth_session(self):
         async with self.__session.get(self.LOGIN_URL) as response:
@@ -247,14 +246,12 @@ class AmaraUser(object):
                     continue
 
                 teams.append(AmaraTeam(name, href))
-        if self.VERBOSE:
-            print("AmaraUser.fetch_teams: Found: {} teams\n".format(len(teams)))
+        self.logger.debug("AmaraUser.fetch_teams: Found: {} teams".format(len(teams)))
         return teams
 
     @classmethod
     async def init(cls, session):
-        if cls.VERBOSE:
-            print("AmaraUser: init()\n")
+        logging.debug("AmaraUser: init()\n")
 
         # I know this is weird but __new__ has to be called first
         user = AmaraUser()
@@ -282,7 +279,7 @@ class AmaraUser(object):
 
     def add_new_job(self, job):
         if self.current_jobs is None:
-            print("ERROR: AmaraUser.add_new_job called before current jobs set")
+            self.logger.error("AmaraUser.add_new_job called before current jobs set")
         else:
             self.current_jobs.append(job)
 
@@ -307,7 +304,7 @@ class AmaraUser(object):
             response = await self.__session.get(self.DASHBOARD_URL)
             doc = await response.text()
             root = html.fromstring(doc)
-        
+
         # embed()
         divs = root.findall(".//div[@class='section']")
         # divs[0] is the first div, divs[0][0] is the child of the div
@@ -323,12 +320,11 @@ class AmaraUser(object):
                 elif b"Subtitler" in html.tostring(curr_job):
                     job = AmaraTranscriptionJob(team_from_html(curr_job))
                 else:
-                    print("Error: AmaraUser.fetch_current_jobs: didn't find Reviewer or Subtitler\n{}".format(html.tostring(curr_job)))
+                    self.logger.error("Error: AmaraUser.fetch_current_jobs: didn't find Reviewer or Subtitler{}".format(html.tostring(curr_job)))
                     return
                 current_jobs.append(job)
 
-        if self.VERBOSE:
-            print("AmaraUser.fetch_current_jobs: Found jobs: {}\n".format(current_jobs))
+        self.logger.debug("AmaraUser.fetch_current_jobs: Found jobs: {}".format(current_jobs))
 
         return current_jobs
 
@@ -341,9 +337,12 @@ class AmaraUser(object):
             job = False
             xpath = ".//li[@class='{}']".format(class_)
             # embed()
-            e = r.find(xpath).find(".//span")
+            e = r.find(xpath)
             if e is None:  # ERROR!!
-                print('searching for jobs, no <li class={}>, source: \n{}'.format(class_, doc))
+                self.logger.error('searching for jobs, no <li class={}>, team: {}'.format(class_, team.name))
+                return False
+
+            e = e.find(".//span")
 
             # <span class="total">1</span> - shows how many jobs available
             if int(e.text) > 0:
@@ -356,8 +355,7 @@ class AmaraUser(object):
         root = html.fromstring(doc)
 
         if self.DEBUG and self.LOCAL:
-            if self.VERBOSE:
-                print("AmaraUser.check_for_new_jobs: debug for team: {}".format(team.name))
+            self.logger.debug("AmaraUser.check_for_new_jobs: debug for team: {}".format(team.name))
             filename = ''
             if team.name is 'ondemand808':
                 filename = "debug/808-2-available-transcription-assignments.htm"
@@ -379,24 +377,20 @@ class AmaraUser(object):
         # so we look for that and return if it exists
         body = root.find(".//body[@class='v1 team_dashboard']")
         if body is not None:  # if it exists, this is an old-style team, skip it
-            if self.VERBOSE:
-                print("skipping old style team: {}".format(team.url))
+            self.logger.debug("skipping old style team: {}".format(team.url))
             return
 
-        if self.VERBOSE:
-            print("Jobs for team: {}".format(team.name))
+        self.logger.debug("Jobs for team: {}".format(team.name))
 
         # when a team has available jobs there will be a div
         # <div id=available_assignments></div>
         try:
             root.get_element_by_id("available_assignments")
         except KeyError:  # if the div does not exist, there are no jobs
-            if self.VERBOSE:
-                print("\tno jobs for team: {}".format(team.name))
+            self.logger.debug("\tno jobs for team: {}".format(team.name))
             return
 
-        if self.VERBOSE:
-            print("\tfound jobs for team: {}".format(team.name))
+        self.logger.debug("\tfound jobs for team: {}".format(team.name))
 
         # there are jobs, find out if they are review or transcription
         for type in ['transcribe', 'review']:
@@ -408,9 +402,7 @@ class AmaraUser(object):
                 else:
                     job = AmaraReviewJob(team)
 
-                if self.VERBOSE:
-                    print("\t\tfound {} for team: {}".format(type, team.name))
+                self.logger.debug("\t\tfound {} for team: {}".format(type, team.name))
 
                 self.add_available_job(job)
-            elif self.VERBOSE:
-                print("\t\tno {} jobs for team: {}".format(type, team.name))
+            self.logger.debug("\t\tno {} jobs for team: {}".format(type, team.name))

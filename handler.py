@@ -8,7 +8,8 @@ import cProfile
 import io
 import pstats
 from amara import AmaraUser, AmaraJob
-# from IPython import embed
+import logging
+from IPython import embed
 
 DEBUG = ""
 VERBOSE = ""
@@ -16,6 +17,7 @@ DB = boto3.resource("dynamodb")
 LOCAL = False
 PROFILE = False
 
+logger = None
 
 def update_team(table, team):
     table.put_item(
@@ -95,53 +97,58 @@ def init_amara_teams(event, context):
 
 
 def get_amara_init_info():
-    global VERBOSE
     global DEBUG
     global LOCAL
     global PROFILE
+    global logger
 
-    verbose = os.getenv('VERBOSE', "FALSE")
-    if verbose.upper() == "FALSE":
-        VERBOSE = False
-        print("VERBOSE is false\n")
-    else:
-        print("VERBOSE is true\n")
-        VERBOSE = True
+    logger = logging.getLogger('amara-handler')
+
+    loglevel = os.getenv('LOGLEVEL', "WARN")
+    numeric_level = getattr(logging, loglevel.upper(), None)
+    try:
+        if not isinstance(numeric_level, int):
+            raise ValueError('Invalid log level: %s' % loglevel)
+    except ValueError:
+        logger.error("Bad loglevel %s", loglevel)
+        loglevel = logging.WARN
+
+    logger.setLevel(loglevel)
+
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    root = logging.getLogger()
+    root.handlers[0].setFormatter(formatter)
+
+
+    logger.info("LOGLEVEL set to %s", loglevel)
 
     debug = os.getenv('DEBUG', "FALSE")
     if debug.upper() == "FALSE":
         DEBUG = False
-        if verbose:
-            print("DEBUG is false\n")
+        logger.info("DEBUG is false\n")
     else:
-        if verbose:
-            print("DEBUG is true\n")
+        logger.info("DEBUG is true\n")
         DEBUG = True
 
     local = os.getenv('LOCAL', "FALSE")
     if local.upper() == "FALSE":
         LOCAL = False
-        if verbose:
-            print("LOCAL is false\n")
+        logger.info("LOCAL is false\n")
     else:
         LOCAL = True
-        if verbose:
-            print("LOCAL is true\n")
+        logger.info("LOCAL is true\n")
 
     profile = os.getenv('PROFILE', "FALSE")
     if profile.upper() == "FALSE":
         PROFILE = False
-        if verbose:
-            print("PROFILE is false\n")
+        logger.info("PROFILE is false\n")
     else:
         PROFILE = True
-        if verbose:
-            print("PROFILE is true\n")
+        logger.info("PROFILE is true\n")
 
     AmaraUser.DEBUG = DEBUG
     AmaraJob.DEBUG  = DEBUG
-    AmaraUser.VERBOSE = VERBOSE
-    AmaraJob.VERBOSE  = VERBOSE
+
     AmaraUser.LOCAL = LOCAL
     AmaraJob.LOCAL  = LOCAL
 
@@ -215,8 +222,8 @@ async def run_job_checks():
 
         if DEBUG and LOCAL:
             teams = AmaraUser.debug_teams()
-        if VERBOSE:
-            print("Total teams to scrape: {}\n".format(len(teams)))
+
+        logger.info("Total teams to scrape: {}\n".format(len(teams)))
 
         tasks = []
         for team in teams.values():
@@ -233,7 +240,7 @@ def check_jobs(event, context):
     get_amara_init_info()
 
     if LOCAL:
-        print(datetime.now())
+        logger.info(datetime.now())
 
     if PROFILE:
         pr = cProfile.Profile()
@@ -253,7 +260,7 @@ def check_jobs(event, context):
             f.write(s.getvalue())
 
     if LOCAL:
-        print(datetime.now())
+        logger.info(datetime.now())
 
     response = {
         "statusCode": 200,
