@@ -197,6 +197,7 @@ class AmaraUser(object):
 
     __instance = None
     __session  = None
+    ignore_teams = ['ondemand637']
 
     @staticmethod
     def debug_teams():
@@ -384,6 +385,10 @@ class AmaraUser(object):
         return current_jobs
 
     async def check_for_new_jobs(self, team):
+    
+        if team.name in self.ignore_teams:
+            self.logger.info("check_for_new_jobs: ignoring team: %s", team.name)
+            return
 
         # parse the li in the collaborations box
         # the procedure is the same for both review and transcription jobs
