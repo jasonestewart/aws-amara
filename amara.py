@@ -52,20 +52,6 @@ class AmaraJob(object):
     def __init__(self):
         self.logger = logging.getLogger("amara-handler.{}.AmaraJob".format(__name__))
 
-    async def save_page(self, session):
-        async with session.get(self.task.video_url) as response:
-            doc = await response.text()
-
-            table = DB.Table('stored_pages')
-            id = str(datetime.utcnow()) + self.task.team.name
-            response = table.put_item(
-               Item={
-                    'ID': id,
-                    'page': doc,
-                    'url': self.task.video_url,
-                }
-            )
-
     def send_email(self):
         self.logger.info("send_email: %s", 'start')
 
@@ -136,7 +122,7 @@ class AmaraJob(object):
                 return
 
             self.logger.info("handle: %s", 'starting auto-join')
-            
+
             ref = {'referer' : self.url}
             async with session.post(url, data=user.auth, headers=ref) as response:
                 if response.status != 200:
@@ -247,7 +233,7 @@ class AmaraUser(object):
         self.logger.debug("handle_jobs: current jobs: \n\t%s",
             "\n\t".join(map(str, self.get_current_jobs())))
 
-        jobs = list(filter(lambda j: curr_job_filter(j, self.get_current_jobs()), 
+        jobs = list(filter(lambda j: curr_job_filter(j, self.get_current_jobs()),
                            self.available_jobs))
 
         self.logger.debug("handle_jobs: new jobs: \n\t%s",
@@ -340,6 +326,21 @@ class AmaraUser(object):
     def get_current_jobs(self):
         return self.current_jobs
 
+    async def fetch_dashboard_html(self):
+        self.logger.info("fetch_dashboard_html: %s", 'start')
+
+        root = None
+        if self.DEBUG:
+            tree = html.parse("debug/dashboard.htm")
+            root = tree.getroot()
+        else:
+            response = await self.__session.get(self.DASHBOARD_URL)
+            doc = await response.text()
+            root = html.fromstring(doc)
+
+        self.logger.info("fetch_dashboard_html: %s", 'end')
+        return root
+
     async def fetch_current_jobs(self):
         self.logger.info("fetch_current_jobs: %s", 'start')
 
@@ -351,14 +352,7 @@ class AmaraUser(object):
             return self.teams[team_name]
 
         current_jobs = []
-        root = None
-        if self.DEBUG:
-            tree = html.parse("debug/dashboard.htm")
-            root = tree.getroot()
-        else:
-            response = await self.__session.get(self.DASHBOARD_URL)
-            doc = await response.text()
-            root = html.fromstring(doc)
+        root = await self.fetch_dashboard_html()
 
         divs = root.findall(".//div[@class='section']")
         # divs[0] is the first div, divs[0][0] is the child of the div
@@ -380,38 +374,12 @@ class AmaraUser(object):
                 current_jobs.append(job)
 
         self.logger.info("fetch_current_jobs: Found jobs: \n\t%s",
-            "\n\t".join(map(str,current_jobs)))
+            "\n\t".join(map(str, current_jobs)))
         self.logger.info("fetch_current_jobs: %s", 'end')
         return current_jobs
 
-    async def check_for_new_jobs(self, team):
-    
-        if team.name in self.ignore_teams:
-            self.logger.info("check_for_new_jobs: ignoring team: %s", team.name)
-            return
-
-        # parse the li in the collaborations box
-        # the procedure is the same for both review and transcription jobs
-        # only the class attribute is different
-        def parse_collaboration(r, class_):
-            job = False
-            xpath = ".//li[@class='{}']".format(class_)
-            e = r.find(xpath)
-            if e is None:  # ERROR!!
-                self.logger.warn('searching for jobs, no <li class=%s>, team: %s', class_, team.name)
-                return False
-
-            e = e.find(".//span")
-            # <span class="total">1</span> - shows how many jobs available
-            if int(e.text) > 0:
-                # there are jobs
-                job = True
-            return job
-
-        response = await self.__session.get(team.url)
-        doc = await response.text()
-        root = html.fromstring(doc)
-
+    async def fetch_job_html(self, team):
+        root = None
         if self.DEBUG and self.LOCAL:
             self.logger.debug("check_for_new_jobs: debug for team: %s", team.name)
             filename = ''
@@ -427,6 +395,44 @@ class AmaraUser(object):
                 filename = "debug/616-one-available-transcription-assignment.htm"
             tree = html.parse(filename)
             root = tree.getroot()
+        else:
+            response = await self.__session.get(team.url)
+            doc = await response.text()
+            root = html.fromstring(doc)
+        return root
+
+    async def save_page(self, root, reason):
+        table = DB.Table('stored_pages')
+        id = str(datetime.utcnow()) + team.name
+        response = table.put_item(
+           Item={
+                'ID': id,
+                'page': html.tostring(root),
+                'url': team.url,
+                'type': reason,
+            }
+        )
+
+    async def check_for_new_jobs_oldstyle(self, team, root):
+        self.logger.debug("check_for_new_jobs_oldstye: team: %s", team.name)
+
+        p = root.find(".//p[@class='empty']")
+        if p is not None:
+            self.logger.debug("\tno available jobs for team: %s", team.name)
+            return
+        else:
+            self.logger.error("oldstyle team has available jobs: %s", team.name)
+            self.save_page(root, "oldstyle team has available job")
+            AmaraTranscriptionJob(team).send_email()
+
+
+    async def check_for_new_jobs(self, team):
+
+        if team.name in self.ignore_teams:
+            self.logger.info("check_for_new_jobs: ignoring team: %s", team.name)
+            return
+
+        root = await self.fetch_job_html(team)
 
         # we can only handle new-style teams
         # old-style teams have had no activity for a year and haven't been upgraded
@@ -435,8 +441,7 @@ class AmaraUser(object):
         # so we look for that and return if it exists
         body = root.find(".//body[@class='v1 team_dashboard']")
         if body is not None:  # if it exists, this is an old-style team, skip it
-            self.logger.warn("skipping old style team: %s", team.url)
-            return
+            return await self.check_for_new_jobs_oldstyle(team, root)
 
         self.logger.debug("check_for_new_jobs: new-style team: %s", team.name)
 
@@ -445,22 +450,17 @@ class AmaraUser(object):
         try:
             root.get_element_by_id("available_assignments")
         except KeyError:  # if the div does not exist, there are no jobs
-            self.logger.debug("\tno jobs for team: %s", team.name)
+            self.logger.debug("\tno available jobs for team: %s", team.name)
             return
 
-        self.logger.info("check_for_new_jobs: found jobs for team: %s", team.name)
+        self.logger.info("check_for_new_jobs: found available jobs for team: %s", team.name)
 
         # there are jobs, find out if they are review or transcription
-        e = root.find(".//div[@class='availableCollabs']")
-        if e is None:
-            self.logger.warn("skipping bad html team: %s", team.name)
-            return
-        
-        o = e.find(".//option")
+        o = e.find(".//option[@data-review-count]")
         if o is None:
-            self.logger.warn("skipping bad html team: %s", team.name)
+            self.logger.warn("skipping bad html team 'option': %s", team.name)
             return
-        
+
         for type in ['transcribe', 'review']:
             val = 'data-{}-count'.format(type)
             if int(o.attrib[val]) > 0:
@@ -470,7 +470,7 @@ class AmaraUser(object):
                 else:
                     job = AmaraReviewJob(team)
 
-                self.logger.debug("\t\tfound %s for team: %s", type, team.name)
+                self.logger.debug("\t\tfound %s job for team: %s", type, team.name)
 
                 self.add_available_job(job)
             else:
