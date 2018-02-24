@@ -456,7 +456,7 @@ class AmaraUser(object):
         self.logger.info("check_for_new_jobs: found available jobs for team: %s", team.name)
 
         # there are jobs, find out if they are review or transcription
-        o = e.find(".//option[@data-review-count]")
+        o = root.find(".//option[@data-review-count]")
         if o is None:
             self.logger.warn("skipping bad html team 'option': %s", team.name)
             return
