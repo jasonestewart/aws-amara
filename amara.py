@@ -183,7 +183,8 @@ class AmaraUser(object):
 
     __instance = None
     __session  = None
-    ignore_teams = ['ondemand637']
+    # ignore_teams = ['ondemand637', 'ondemand482']
+    ignore_teams = None
 
     @staticmethod
     def debug_teams():
@@ -295,7 +296,17 @@ class AmaraUser(object):
             dict[team.name] = team
         user.teams = dict
         user.current_jobs = await user.fetch_current_jobs()
+        user.ignore_teams = user.fetch_ignore_teams()
         module_logger.debug("AmaraUser.init: %s", 'end')
+
+    @staticmethod
+    def fetch_ignore_teams():
+        module_logger.debug("AmaraUser.fetch_ignore_teams: %s", 'start')
+        db_table = DB.Table("ignore_team")
+        response = db_table.scan()
+        teams = list(map(lambda r: r['team_name'], response["Items"]))
+        module_logger.debug("AmaraUser.fetch_ignore_teams:  found teams: %s", teams)
+        return teams
 
     @staticmethod
     def __get_db_user():
@@ -455,6 +466,7 @@ class AmaraUser(object):
         if o is None:
             self.logger.warn("skipping bad html team 'option': %s", team.name)
             return
+
         if o.attrib['data-language-code'] != 'en':
             self.logger.info("check_for_new_jobs: non-english-jobs: %s", team.name)
             return
