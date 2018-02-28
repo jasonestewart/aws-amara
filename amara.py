@@ -95,7 +95,7 @@ class AmaraJob(object):
                 tree = html.parse("debug/427-handle-4-transcription-jobs.htm")
             root = tree.getroot()
         else:
-            self.logger.info("handle: %s", 'fetching assignment')
+            self.logger.info("handle: fetching assignment for team: %s", self.team.name)
             ref = {'referer' : self.team.url}
             # crsf = response.cookies.get('csrftoken').value
             user = AmaraUser()
@@ -221,10 +221,6 @@ class AmaraUser(object):
         def curr_job_filter(new, curr_jobs):
             result = list(filter(lambda curr: curr.team.name == new.team.name and curr.type == new.type,
                                  curr_jobs))
-            action = 'accepting'
-            if result:
-                action = 'rejecting'
-            self.logger.debug("job_filter: action: {}, new job: {}".format(action, new))
             return not result
 
         self.logger.debug("handle_jobs: available jobs: \n\t%s",
@@ -236,11 +232,10 @@ class AmaraUser(object):
         jobs = list(filter(lambda j: curr_job_filter(j, self.get_current_jobs()),
                            self.available_jobs))
 
-        self.logger.debug("handle_jobs: new jobs: \n\t%s",
+        self.logger.info("handle_jobs: new jobs: \n\t%s",
             "\n\t".join(map(str, jobs)))
 
         for job in jobs:
-            self.logger.debug("handle_jobs: Found new job: %s", job)
             await job.handle(self.__session)
 
         self.logger.info("handle_jobs: %s", 'end')
@@ -459,6 +454,9 @@ class AmaraUser(object):
         o = root.find(".//option[@data-review-count]")
         if o is None:
             self.logger.warn("skipping bad html team 'option': %s", team.name)
+            return
+        if o.attrib['data-language-code'] != 'en':
+            self.logger.info("check_for_new_jobs: non-english-jobs: %s", team.name)
             return
 
         for type in ['transcribe', 'review']:
