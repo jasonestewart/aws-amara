@@ -4,6 +4,8 @@ from SESEmail import SESEmail
 from datetime import datetime
 from lxml import html
 import logging
+import json
+import asyncio
 # from IPython import embed
 
 AWS_REGION = "us-east-1"
@@ -76,63 +78,20 @@ class AmaraJob(object):
         email.send_email()
         self.logger.info("send_email: %s", 'end')
 
-    async def handle(self, session):
+    async def handle(self, type):
         self.logger.info("handle: %s", 'start')
 
         self.logger.debug("handle: self: %s", self)
 
-        root = None
-        if self.DEBUG and self.LOCAL:
-            self.logger.info("handle: %s", 'adding debug assignments')
-            tree = None
-            if self.team.name == 'ondemand808':
-                tree = html.parse("debug/808-handle-two-transcription-jobs.htm")
-            elif self.team.name == 'ondemand616':
-                tree = html.parse("debug/616-handle-one-transcription-job.htm")
-            elif self.team.name == 'ondemand212':
-                tree = html.parse("debug/212-handle-one-review-job.htm")
-            elif self.team.name == 'ondemand427-english-team':
-                tree = html.parse("debug/427-handle-4-transcription-jobs.htm")
-            root = tree.getroot()
-        else:
-            self.logger.info("handle: fetching assignment for team: %s", self.team.name)
-            ref = {'referer' : self.team.url}
-            # crsf = response.cookies.get('csrftoken').value
-            user = AmaraUser()
-#             auth = {
-#                 'csrfmiddlewaretoken' : crsf,
-#                 'username' : self.name,
-#                 'password' : self.password,
-#             }
-            response = await session.post(self.url, data=user.auth, headers=ref)
-            doc = await response.text()
-            root = html.fromstring(doc)
+        user = AmaraUser()
+        result = await user.api_call_put(user.API_JOIN_TEMPLATE.format(self.team.name, self.job_id),
+                                   {type:user.name})
+        try:
+            if result[type]['username'] == user.name:
+                user.add_new_job(self)
+        except KeyError:
+            self.logger.exception("handle: bad result: %s", result)
 
-        a = root.findall(".//a[@class='button cta']")
-        if len(a) > 0:
-            href = a[0].attrib['href']
-            if href.startswith('http'):
-                url = href
-            else:
-                url = BASE_URL + href
-            self.send_email()
-
-            if self.DEBUG and self.LOCAL:
-                self.logger.info("handle: %s", 'debug exit')
-                return
-
-            self.logger.info("handle: %s", 'starting auto-join')
-
-            ref = {'referer' : self.url}
-            async with session.post(url, data=user.auth, headers=ref) as response:
-                if response.status != 200:
-                    text = await response.text()
-                    self.logger.error("error while joining: %s, status: %s, headers: %s, text: %s",
-                        url, response.status, response.headers, text)
-                else:
-                    self.logger.info("handle: join success, adding job: %s", self)
-                    user = AmaraUser()
-                    user.add_new_job(self)
         self.logger.info("handle: %s", 'end')
 
 
@@ -144,14 +103,18 @@ class AmaraReviewJob(AmaraJob):
 
     REVIEW_ASS_TEMPLATE = "/en/teams/{}/assignments/?type=review&language=en"
 
-    def __init__(self, team):
+    def __init__(self, team, job_id):
         self.type = 'review'
         self.team = team
+        self.job_id = job_id
         self.logger = logging.getLogger("amara-handler.{}.AmaraReviewJob".format(__name__))
         self.url = BASE_URL + self.REVIEW_ASS_TEMPLATE.format(team.name)
 
     def __repr__(self):
         return "<AmaraReviewJob: Team: {}, URL: {}>\n".format(self.team, self.url)
+
+    async def handle(self):
+        await super().handle('reviewer')
 
 
 class AmaraTranscriptionJob(AmaraJob):
@@ -161,14 +124,18 @@ class AmaraTranscriptionJob(AmaraJob):
 
     TRANSCRIBE_ASS_TEMPLATE = "/en/teams/{}/assignments/?type=transcribe&language=en"
 
-    def __init__(self, team):
+    def __init__(self, team, job_id):
         self.type = 'transcription'
         self.team = team
+        self.job_id = job_id
         self.logger = logging.getLogger("amara-handler.{}.AmaraTranscriptionJob".format(__name__))
         self.url = BASE_URL + self.TRANSCRIBE_ASS_TEMPLATE.format(team.name)
 
     def __repr__(self):
         return "<AmaraTranscriptionJob: Team: {}, URL: {}>\n".format(self.team, self.url)
+
+    async def handle(self):
+        await super().handle('subtitler')
 
 
 class AmaraUser(object):
@@ -181,20 +148,19 @@ class AmaraUser(object):
     POST_LOGIN_URL = BASE_URL + "/en/auth/login_post/"
     DASHBOARD_URL  = BASE_URL + "/en/profiles/dashboard/"
 
+    API_URL        = BASE_URL + "/api"
+    API_TEAMS_URL  = API_URL + "/teams/"
+    API_USERS_URL  = API_URL + "/users/"
+    API_VIDEOS_URL = API_URL + "/videos/"
+
+    API_TEAM_JOB_URL_TEMPLATE = API_TEAMS_URL + "{}/subtitle-requests/"
+    API_USER_ACT_URL_TEMPLATE = API_USERS_URL + "{}/activity/"
+    API_VIDEOS_TEMPLATE       = API_VIDEOS_URL + "{}/"
+    API_JOIN_TEMPLATE         = API_TEAM_JOB_URL_TEMPLATE + "{}/"
+
     __instance = None
     __session  = None
-    # ignore_teams = ['ondemand637', 'ondemand482']
     ignore_teams = None
-
-    @staticmethod
-    def debug_teams():
-        module_logger.info("AmaraUser: debug_teams")
-        return {'ondemand808': AmaraTeam('ondemand808'),
-                'ondemand043': AmaraTeam('ondemand043'),
-                'ondemand616': AmaraTeam('ondemand616'),
-                'ondemand212': AmaraTeam('ondemand212'),
-                'ondemand427-english-team': AmaraTeam('ondemand427-english-team'),
-        }
 
     def __init__(self):
         self.logger = logging.getLogger("amara-handler.{}.AmaraUser".format(__name__))
@@ -205,11 +171,13 @@ class AmaraUser(object):
         if cls.__instance is None:
             module_logger.info("AmaraUser.__new__: %s", 'creating singleton')
             cls.__instance = object.__new__(cls)
-            login = cls.__get_db_user()
+            login = cls.get_db_user()
+            cls.__instance.api_key = login['api_key']
             cls.__instance.name = login['user']
             cls.__instance.password = login['pass']
             cls.__instance.current_jobs = None
             cls.__instance.available_jobs = []
+            cls.__instance.teams = []
         return cls.__instance
 
     async def handle_jobs(self):
@@ -237,7 +205,7 @@ class AmaraUser(object):
             "\n\t".join(map(str, jobs)))
 
         for job in jobs:
-            await job.handle(self.__session)
+            await job.handle()
 
         self.logger.info("handle_jobs: %s", 'end')
 
@@ -257,69 +225,74 @@ class AmaraUser(object):
         self.logger.info("auth_session: %s", 'end')
         return await self.__session.post(self.POST_LOGIN_URL, data=self.auth, headers=ref)
 
-    def fetch_teams(self, doc):
-        self.logger.info("fetch_teams: %s", 'start')
+    async def fetch_teams(self, offset):
+        teams = 0
+        p = {'limit': '20', 'offset': offset}
+        async with self.__session.get(self.API_TEAMS_URL,
+                                      params=p,
+                                      headers=self.api_headers) as r:
+            j = await r.json()
+            for team in j['objects']:
+                if re.search(r"demand.*\d\d\d", team['slug']):
+                    t = AmaraTeam(team['slug'], team['activity_uri'])
+                    teams += 1
+                    self.teams.append(t)
 
-        teams = []
-        root = html.fromstring(doc)
-        menu = root.get_element_by_id('user-menu')
-        if menu is not None:
-            ul = menu.getnext()
-            for candidate in ul.findall('.//a'):
-                href = candidate.attrib['href']
-                if not href.startswith('/en/teams/'):
-                    continue
+        self.logger.debug("fetch_teams_new: offset: %i, found %i OnDemand teams", offset, teams)
+        self.logger.info("fetch_teams_new: %s", 'end')
 
-                name = href.split('/')[-2]
-
-                if name == 'my':  # Ignore the paged teams listings link.
-                    continue
-
-                teams.append(AmaraTeam(name, href))
-        self.logger.info("fetch_teams: Found: %i teams", len(teams))
-        self.logger.info("fetch_teams: %s", 'end')
-        return teams
+    async def bound_team_fetch(self, sem, offset):
+        async with sem:
+            return await self.fetch_teams(offset)
 
     @classmethod
     async def init(cls, session):
-        module_logger.debug("AmaraUser.init: %s", 'start')
+        module_logger.info("AmaraUser.init: %s", 'start')
 
         # I know this is weird but __new__ has to be called first
         user = AmaraUser()
         user.__session = session
 
-        response = await user.auth_session()
-        doc = await response.text()
-        teams = user.fetch_teams(doc)
+        sem = asyncio.Semaphore(20)
+        user.api_headers = {'X-api-key'      : user.api_key,
+                            'X-api-username' : user.name,
+        }
+
+        tasks = []
+        for offset in range(0, 323, 20):
+            task = asyncio.ensure_future(user.bound_team_fetch(sem, offset))
+            tasks.append(task)
+
+        # Gather all futures
+        tasks = asyncio.gather(*tasks)
+        await tasks
+
         dict = {}
-        for team in teams:
+        for team in user.teams:
             dict[team.name] = team
+
         user.teams = dict
+
         user.current_jobs = await user.fetch_current_jobs()
-        user.ignore_teams = user.fetch_ignore_teams()
-        module_logger.debug("AmaraUser.init: %s", 'end')
+        user.ignore_teams = user.get_db_ignore_teams()
+        module_logger.info("AmaraUser.init: %s", 'end')
 
     @staticmethod
-    def fetch_ignore_teams():
-        module_logger.debug("AmaraUser.fetch_ignore_teams: %s", 'start')
+    def get_db_ignore_teams():
+        module_logger.info("AmaraUser.fetch_ignore_teams: %s", 'start')
         db_table = DB.Table("ignore_team")
         response = db_table.scan()
         teams = list(map(lambda r: r['team_name'], response["Items"]))
-        module_logger.debug("AmaraUser.fetch_ignore_teams:  found teams: %s", teams)
+        module_logger.info("AmaraUser.fetch_ignore_teams:  found teams: %s", teams)
         return teams
 
     @staticmethod
-    def __get_db_user():
-        module_logger.debug("AmaraUser.__get_db_user: %s", 'start')
+    def get_db_user():
+        module_logger.info("AmaraUser.__get_db_user: %s", 'start')
         user = DB.Table("user")
         response = user.get_item(Key={"service_name" : "amara"})
-        module_logger.debug("AmaraUser.__get_db_user: %s", 'end')
+        module_logger.info("AmaraUser.__get_db_user: %s", 'end')
         return response["Item"]
-
-    def add_available_job(self, job):
-        self.logger.info("add_available_jobs: %s", 'start')
-        self.available_jobs.append(job)
-        self.logger.info("add_available_jobs: %s", 'end')
 
     def add_new_job(self, job):
         self.logger.info("add_new_job: %s", 'start')
@@ -332,82 +305,40 @@ class AmaraUser(object):
     def get_current_jobs(self):
         return self.current_jobs
 
-    async def fetch_dashboard_html(self):
-        self.logger.info("fetch_dashboard_html: %s", 'start')
-
-        root = None
-        if self.DEBUG:
-            tree = html.parse("debug/dashboard.htm")
-            root = tree.getroot()
-        else:
-            response = await self.__session.get(self.DASHBOARD_URL)
-            doc = await response.text()
-            root = html.fromstring(doc)
-
-        self.logger.info("fetch_dashboard_html: %s", 'end')
-        return root
-
     async def fetch_current_jobs(self):
         self.logger.info("fetch_current_jobs: %s", 'start')
-
-        def team_from_html(node):
-            # node is of form: <li><a href='...'></a>
-            href = curr_job[0].attrib['href']
-            # matching /en/teams/ondemand212/ to get group name
-            team_name = re.search(r"/([-\w]+)/$", href).group(1)
-            return self.teams[team_name]
+        jobs = await self.api_call(self.API_USER_ACT_URL_TEMPLATE.format(self.name))
+        finished = {}
+        current = []
+        for job in jobs:
+            if re.search(r"collab-unassign|collab-endorse|collab-leave", job['type']):
+                finished[job['video']] = 1
+            elif re.search(r"collab-join|collab-assign", job['type']) and not job['video'] in finished:
+                current.append(job)
 
         current_jobs = []
-        root = await self.fetch_dashboard_html()
-
-        divs = root.findall(".//div[@class='section']")
-        # divs[0] is the first div, divs[0][0] is the child of the div
-        # <div><h3>Available assignments</h3>
-        if len(divs) > 1 and "assignments" in divs[0][0].text:
-            # divs[0][1] is the second child of the div
-            # <div><h3></h3><ul>
-            li = divs[0][1].findall(".//li")  # find all the current jobs
-            for curr_job in li:
-                job = None
-                if b"Reviewer" in html.tostring(curr_job):
-                    job = AmaraReviewJob(team_from_html(curr_job))
-                elif b"Subtitler" in html.tostring(curr_job):
-                    job = AmaraTranscriptionJob(team_from_html(curr_job))
+        if current:
+            for job in current:
+                vid_info = await self.api_call(self.API_VIDEOS_TEMPLATE.format(job['video']), False)
+                team_name = vid_info['team']
+                team = self.teams[team_name]
+                sub_reqs = await self.api_call(self.API_TEAM_JOB_URL_TEMPLATE.format(team_name))
+                for req in sub_reqs:
+                    if req['video'] == job['video']:
+                        if req['reviewer'] is not None and req['reviewer']['username'] == self.name:
+                            current_jobs.append(AmaraReviewJob(team))
+                        elif req['subtitler'] is not None and req['subtitler']['username'] == self.name:
+                            current_jobs.append(AmaraTranscriptionJob(team))
+                        else:
+                            self.logger.error("fetch_current_jobs: couldn't find info for job: %s, req: %s", job, req)
+                        break
                 else:
-                    self.logger.error("fetch_current_jobs: no Reviewer or Subtitler: %s",
-                        html.tostring(curr_job))
-                    return
-                current_jobs.append(job)
+                    self.logger.error("fetch_current_jobs: couldn't find info for job: %s, reqs: %s", job, sub_reqs)
 
-        self.logger.info("fetch_current_jobs: Found jobs: \n\t%s",
-            "\n\t".join(map(str, current_jobs)))
-        self.logger.info("fetch_current_jobs: %s", 'end')
+        self.logger.info("fetch_current_jobs: end: found jobs: %s", current_jobs)
         return current_jobs
 
-    async def fetch_job_html(self, team):
-        root = None
-        if self.DEBUG and self.LOCAL:
-            self.logger.debug("check_for_new_jobs: debug for team: %s", team.name)
-            filename = ''
-            if team.name == 'ondemand808':
-                filename = "debug/808-2-available-transcription-assignments.htm"
-            elif team.name == 'ondemand043':
-                filename = "debug/043-no-assignments.htm"
-            elif team.name == 'ondemand212':
-                filename = "debug/212-one-available-review-assignment.htm"
-            elif team.name == 'ondemand427-english-team':
-                filename = "debug/427-4-available-transcription-assignments.htm"
-            elif team.name == 'ondemand616':
-                filename = "debug/616-one-available-transcription-assignment.htm"
-            tree = html.parse(filename)
-            root = tree.getroot()
-        else:
-            response = await self.__session.get(team.url)
-            doc = await response.text()
-            root = html.fromstring(doc)
-        return root
-
-    async def save_page(self, root, reason):
+    async def save_page(self, root, team, reason):
         table = DB.Table('stored_pages')
         id = str(datetime.utcnow()) + team.name
         response = table.put_item(
@@ -419,69 +350,46 @@ class AmaraUser(object):
             }
         )
 
-    async def check_for_new_jobs_oldstyle(self, team, root):
-        self.logger.debug("check_for_new_jobs_oldstye: team: %s", team.name)
-
-        p = root.find(".//p[@class='empty']")
-        if p is not None:
-            self.logger.debug("\tno available jobs for team: %s", team.name)
-            return
-        else:
-            self.logger.error("oldstyle team has available jobs: %s", team.name)
-            self.save_page(root, "oldstyle team has available job")
-            AmaraTranscriptionJob(team).send_email()
-
-
     async def check_for_new_jobs(self, team):
 
         if team.name in self.ignore_teams:
             self.logger.info("check_for_new_jobs: ignoring team: %s", team.name)
             return
 
-        root = await self.fetch_job_html(team)
+        jobs = await self.api_call(self.API_TEAM_JOB_URL_TEMPLATE.format(team.name))
 
-        # we can only handle new-style teams
-        # old-style teams have had no activity for a year and haven't been upgraded
-        # their body tag will look like
-        # <body class=v1 team_dashboard>
-        # so we look for that and return if it exists
-        body = root.find(".//body[@class='v1 team_dashboard']")
-        if body is not None:  # if it exists, this is an old-style team, skip it
-            return await self.check_for_new_jobs_oldstyle(team, root)
+        for job in jobs:
+            if job['language'] == 'en':
+                if job['work_status'] == 'needs-subtitler':
+                    self.logger.info("check_for_new_jobs: found available transcription job for team: %s", team.name)
+                    self.available_jobs.append(AmaraTranscriptionJob(team, job['job_id']))
+                elif job['work_status'] == 'needs-reviewer':
+                    self.logger.info("check_for_new_jobs: found available review job for team: %s", team.name)
+                    self.available_jobs.append(AmaraReviewJob(team, job['job_id']))
 
-        self.logger.debug("check_for_new_jobs: new-style team: %s", team.name)
+    async def api_call_put(self, url, json_data):
+        self.logger.info("api_call_put: start, url: %s, data: %s", url, json_data)
 
-        # when a team has available jobs there will be a div
-        # <div id=available_assignments></div>
-        try:
-            root.get_element_by_id("available_assignments")
-        except KeyError:  # if the div does not exist, there are no jobs
-            self.logger.debug("\tno available jobs for team: %s", team.name)
-            return
+        async with self.__session.put(url, headers=self.api_headers, data=json_data) as r:
+            j = await r.json()
 
-        self.logger.info("check_for_new_jobs: found available jobs for team: %s", team.name)
+        self.logger.info("api_call_put: end, url: %s", url)
+        return j
+    
 
-        # there are jobs, find out if they are review or transcription
-        o = root.find(".//option[@data-review-count]")
-        if o is None:
-            self.logger.warn("skipping bad html team 'option': %s", team.name)
-            return
+    async def api_call(self, url, list=True):
+        self.logger.info("api_call: start, url: %s", url)
 
-        if o.attrib['data-language-code'] != 'en':
-            self.logger.info("check_for_new_jobs: non-english-jobs: %s", team.name)
-            return
-
-        for type in ['transcribe', 'review']:
-            val = 'data-{}-count'.format(type)
-            if int(o.attrib[val]) > 0:
-                job = None
-                if type == 'transcribe':
-                    job = AmaraTranscriptionJob(team)
-                else:
-                    job = AmaraReviewJob(team)
-
-                self.logger.debug("\t\tfound %s job for team: %s", type, team.name)
-
-                self.add_available_job(job)
+        async with self.__session.get(url, headers=self.api_headers) as r:
+            ret_val = None
+            j = await r.json()
+            if list:
+                if 'objects' not in j:
+                    self.logger.exception("check_for_new_jobs: team: %s, found json: %s", team.name, json.dumps(j))
+                    raise
+                ret_val = j['objects']
             else:
-                self.logger.debug("\t\tno %s jobs for team: %s", type, team.name)
+                ret_val = j
+
+        self.logger.info("api_call: end, url: %s", url)
+        return ret_val
