@@ -71,9 +71,9 @@ functions:
     handler: handler.check_jobs
     environment: # Function level environment variables
       DEBUG: FALSE
-      LOCAL: FALSE
-      PROFILE: FALSE
-      LOGLEVEL: DEBUG
+      LOCAL: TRUE
+      PROFILE: TRUE
+      LOGLEVEL: INFO
     timeout: 120
     events:
       - schedule:
@@ -81,6 +81,11 @@ functions:
       - enabled: true    
   check_teams:
     handler: handler.check_teams
+    environment: # Function level environment variables
+      DEBUG: FALSE
+      LOCAL: TRUE
+      PROFILE: TRUE
+      LOGLEVEL: DEBUG
   init_amara_teams:
     handler: handler.init_amara_teams
   get_stored_pages:
