@@ -179,7 +179,6 @@ class AmaraUser(object):
             cls.__instance.password = login['pass']
             cls.__instance.current_jobs = None
             cls.__instance.available_jobs = []
-            cls.__instance.teams = []
         return cls.__instance
 
     async def handle_jobs(self):
@@ -227,7 +226,7 @@ class AmaraUser(object):
         self.logger.info("auth_session: %s", 'end')
         return await self.__session.post(self.POST_LOGIN_URL, data=self.auth, headers=ref)
 
-    async def fetch_teams(self, offset):
+    async def fetch_teams_paged(self, offset):
         teams = 0
         p = {'limit': '20', 'offset': offset}
         async with self.__session.get(self.API_TEAMS_URL,
@@ -238,14 +237,29 @@ class AmaraUser(object):
                 if re.search(r"demand.*\d\d\d", team['slug']):
                     t = AmaraTeam(team['slug'], team['activity_uri'])
                     teams += 1
-                    self.teams.append(t)
+                    self.teams_list.append(t)
 
-        self.logger.debug("fetch_teams_new: offset: %i, found %i OnDemand teams", offset, teams)
-        self.logger.info("fetch_teams_new: %s", 'end')
+        self.logger.debug("fetch_teams_paged: offset: %i, found %i OnDemand teams", offset, teams)
+        self.logger.info("fetch_teams_paged: %s", 'end')
 
     async def bound_team_fetch(self, sem, offset):
         async with sem:
-            return await self.fetch_teams(offset)
+            return await self.fetch_teams_paged(offset)
+
+    async def fetch_all_teams(self):
+        self.logger.info("fetch_teams: %s", 'start')
+        self.teams_list = []
+        tasks = []
+        sem = asyncio.Semaphore(20)
+        for offset in range(0, 323, 20):
+            task = asyncio.ensure_future(self.bound_team_fetch(sem, offset))
+            tasks.append(task)
+
+        # Gather all futures
+        tasks = asyncio.gather(*tasks)
+        await tasks
+        self.logger.info("fetch_teams: %s", 'end')
+        return self.teams_list
 
     @classmethod
     async def init(cls, session):
@@ -255,25 +269,13 @@ class AmaraUser(object):
         user = AmaraUser()
         user.__session = session
 
-        sem = asyncio.Semaphore(20)
         user.api_headers = {'X-api-key'      : user.api_key,
                             'X-api-username' : user.name,
         }
-
-        tasks = []
-        for offset in range(0, 323, 20):
-            task = asyncio.ensure_future(user.bound_team_fetch(sem, offset))
-            tasks.append(task)
-
-        # Gather all futures
-        tasks = asyncio.gather(*tasks)
-        await tasks
-
-        dict = {}
-        for team in user.teams:
-            dict[team.name] = team
-
-        user.teams = dict
+        teams_list = await user.fetch_all_teams()
+        user.teams = {}
+        for team in teams_list:
+            user.teams[team.name] = team
 
         user.current_jobs = await user.fetch_current_jobs()
         user.ignore_teams = user.get_db_ignore_teams()
