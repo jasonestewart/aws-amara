@@ -54,7 +54,7 @@ class AmaraJob(object):
     def __init__(self):
         self.logger = logging.getLogger("amara-handler.{}.AmaraJob".format(__name__))
 
-    def send_email(self):
+    def send_email(self, message):
         self.logger.info("send_email: %s", 'start')
 
         # await self.save_page(session)
@@ -66,14 +66,15 @@ class AmaraJob(object):
 <head></head>
 <body>
   <h1>Amara Alert: {type}</h1>
+  <h2>Message</h2>
+  <p>{msg}</p>
   <p>Action from team {team} requires your attention
     <a href='{team_url}'>{team_url}</a></p>
-    <p><a href='{url}'>{url}</a></p>
 </body>
 </html>
         """.format(team=team.name,
                    type=self.type,
-                   url=self.url,
+                   msg=message,
                    team_url=team.url)
         email.send_email()
         self.logger.info("send_email: %s", 'end')
@@ -89,6 +90,7 @@ class AmaraJob(object):
         try:
             if result[type]['username'] == user.name:
                 user.add_new_job(self)
+                self.send_email("successfully joined new job")
         except KeyError:
             self.logger.exception("handle: bad result: %s", result)
 
