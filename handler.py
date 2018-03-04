@@ -185,11 +185,31 @@ async def check_amara_teams():
 def check_teams(event, context):
     get_amara_init_info()
 
+    if LOCAL:
+        logger.info(datetime.now())
+
+    if PROFILE:
+        pr = cProfile.Profile()
+        pr.enable()
+
+
     loop = asyncio.get_event_loop()
     future = asyncio.ensure_future(check_amara_teams())
     jobs, teams = loop.run_until_complete(future)
 
     # result = update_teams(teams)
+
+    if PROFILE:
+        pr.disable()
+        s = io.StringIO()
+        sortby = 'cumulative'
+        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+        ps.print_stats()
+        with open('stats.txt', 'w') as f:
+            f.write(s.getvalue())
+
+    if LOCAL:
+        logger.info(datetime.now())
 
     message = "Current jobs: {}\n".format(jobs)
     message += "Found teams: {}\n".format(len(teams))
@@ -219,9 +239,6 @@ async def run_job_checks():
         await AmaraUser.init(session)
         user = AmaraUser()
         teams = user.teams
-
-        if DEBUG and LOCAL:
-            teams = AmaraUser.debug_teams()
 
         logger.info("Total teams to scrape: %i", len(teams))
 
