@@ -15,27 +15,12 @@ BASE_URL = "https://amara.org"
 module_logger = logging.getLogger('amara-handler.{}'.format(__name__))
 
 
-class AmaraTask(object):
-    """Class for encapsulating Tasks on Amara.org"""
-
-    EN_URL = "/en/videos/"
-    VIDEO_URL_TEMPLATE = BASE_URL + EN_URL + "{}/en/?team={}"
-    VIDEO_URL_REGEX = re.compile(r"^\w+")
-
-    def set_video_url(self, url):
-        url = url.strip(self.EN_URL)
-        self.film_id = self.VIDEO_URL_REGEX.match(url).group()
-        self.video_url = self.VIDEO_URL_TEMPLATE.format(self.film_id, self.team.name)
-
-
 class AmaraTeam(object):
     """Class for encapsulating Teams on Amara.org"""
 
-    TEAM_URL_TEMPLATE = BASE_URL + "/en/teams/{}/"
-
-    def __init__(self, name, url=''):
+    def __init__(self, name, url):
         self.name = name
-        self.url = self.TEAM_URL_TEMPLATE.format(name)
+        self.url = url
 
     def __repr__(self):
         return "<AmaraTeam: Name: {}, URL: {}>".format(self.name, self.url)
@@ -46,10 +31,6 @@ class AmaraJob(object):
 
     LOCAL = False
     DEBUG = False
-    AUTO_JOIN_JOBS = False
-
-    EDITOR_URL = "/en/subtitles/editor/"
-    JOB_URL_TEMPLATE = BASE_URL + EDITOR_URL + "{}/en/?team={}"
 
     def __init__(self):
         self.logger = logging.getLogger("amara-handler.{}.AmaraJob".format(__name__))
@@ -100,17 +81,11 @@ class AmaraJob(object):
 class AmaraReviewJob(AmaraJob):
     """Class for encapsulating new review jobs on Amara.org"""
 
-    NO_REVIEW_TEAMS = ['ondemand060', 'ondemand616', 'ondemand427-english-team',
-                       'ondemand750', 'ondemand806', 'ondemand828', 'ondemand830', 'ondemand676']
-
-    REVIEW_ASS_TEMPLATE = "/en/teams/{}/assignments/?type=review&language=en"
-
     def __init__(self, team, job_id):
         self.type = 'review'
         self.team = team
         self.job_id = job_id
         self.logger = logging.getLogger("amara-handler.{}.AmaraReviewJob".format(__name__))
-        self.url = BASE_URL + self.REVIEW_ASS_TEMPLATE.format(team.name)
 
     def __repr__(self):
         return "<AmaraReviewJob: Team: {}, URL: {}>\n".format(self.team, self.url)
@@ -122,16 +97,11 @@ class AmaraReviewJob(AmaraJob):
 class AmaraTranscriptionJob(AmaraJob):
     """Class for encapsulating new transcription jobs on Amara.org"""
 
-    JOIN_URL_TEMPLATE = "/en/videos/{}/collaborations/en/join/subtitler/"
-
-    TRANSCRIBE_ASS_TEMPLATE = "/en/teams/{}/assignments/?type=transcribe&language=en"
-
     def __init__(self, team, job_id):
         self.type = 'transcription'
         self.team = team
         self.job_id = job_id
         self.logger = logging.getLogger("amara-handler.{}.AmaraTranscriptionJob".format(__name__))
-        self.url = BASE_URL + self.TRANSCRIBE_ASS_TEMPLATE.format(team.name)
 
     def __repr__(self):
         return "<AmaraTranscriptionJob: Team: {}, URL: {}>\n".format(self.team, self.url)
@@ -145,10 +115,6 @@ class AmaraUser(object):
 
     LOCAL = False
     DEBUG = False
-
-    LOGIN_URL      = BASE_URL + "/en/auth/login/?next=/"
-    POST_LOGIN_URL = BASE_URL + "/en/auth/login_post/"
-    DASHBOARD_URL  = BASE_URL + "/en/profiles/dashboard/"
 
     API_URL        = BASE_URL + "/api"
     API_TEAMS_URL  = API_URL + "/teams/"
@@ -210,22 +176,6 @@ class AmaraUser(object):
 
         self.logger.info("handle_jobs: %s", 'end')
 
-    async def auth_session(self):
-        self.logger.info("auth_session: %s", 'start')
-
-        async with self.__session.get(self.LOGIN_URL) as response:
-            await response.read()
-            crsf = response.cookies.get('csrftoken').value
-        self.auth = {
-            'csrfmiddlewaretoken' : crsf,
-            'username' : self.name,
-            'password' : self.password,
-        }
-        ref = {'referer' : self.LOGIN_URL}
-
-        self.logger.info("auth_session: %s", 'end')
-        return await self.__session.post(self.POST_LOGIN_URL, data=self.auth, headers=ref)
-
     async def fetch_teams_paged(self, offset):
         teams = 0
         p = {'limit': '20', 'offset': offset}
@@ -240,14 +190,13 @@ class AmaraUser(object):
                     self.teams_list.append(t)
 
         self.logger.debug("fetch_teams_paged: offset: %i, found %i OnDemand teams", offset, teams)
-        self.logger.info("fetch_teams_paged: %s", 'end')
 
     async def bound_team_fetch(self, sem, offset):
         async with sem:
             return await self.fetch_teams_paged(offset)
 
     async def fetch_all_teams(self):
-        self.logger.info("fetch_teams: %s", 'start')
+        self.logger.info("fetch_all_teams: %s", 'start')
         self.teams_list = []
         tasks = []
         sem = asyncio.Semaphore(20)
@@ -258,7 +207,8 @@ class AmaraUser(object):
         # Gather all futures
         tasks = asyncio.gather(*tasks)
         await tasks
-        self.logger.info("fetch_teams: %s", 'end')
+
+        self.logger.info("fetch_all_teams: %s", 'start')
         return self.teams_list
 
     @classmethod
@@ -382,7 +332,7 @@ class AmaraUser(object):
     
 
     async def api_call(self, url, list=True):
-        self.logger.info("api_call: start, url: %s", url)
+        self.logger.debug("api_call: start, url: %s", url)
 
         async with self.__session.get(url, headers=self.api_headers) as r:
             ret_val = None
@@ -395,5 +345,4 @@ class AmaraUser(object):
             else:
                 ret_val = j
 
-        self.logger.info("api_call: end, url: %s", url)
         return ret_val
