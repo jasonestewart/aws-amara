@@ -220,7 +220,8 @@ class AmaraUser(object):
             return
 
         def curr_job_filter(new, curr_jobs):
-            result = list(filter(lambda curr: curr.team.name == new.team.name and curr.type == new.type,
+            # curr_jobs is now a list of teams - no need to check job type
+            result = list(filter(lambda curr: curr.name == new.team.name,
                                  curr_jobs))
             return not result
 
@@ -368,15 +369,7 @@ class AmaraUser(object):
             # <div><h3></h3><ul>
             li = divs[0][1].findall(".//li")  # find all the current jobs
             for curr_job in li:
-                job = None
-                if b"Reviewer" in html.tostring(curr_job):
-                    job = AmaraReviewJob(team_from_html(curr_job))
-                elif b"Subtitler" in html.tostring(curr_job):
-                    job = AmaraTranscriptionJob(team_from_html(curr_job))
-                else:
-                    self.logger.error("fetch_current_jobs: no Reviewer or Subtitler: %s",
-                        html.tostring(curr_job))
-                    return
+                job = team_from_html(curr_job)
                 current_jobs.append(job)
 
         self.logger.info("fetch_current_jobs: Found jobs: \n\t%s",

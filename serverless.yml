@@ -73,7 +73,7 @@ functions:
       DEBUG: FALSE
       LOCAL: TRUE
       PROFILE: TRUE
-      LOGLEVEL: INFO
+      LOGLEVEL: DEBUG
     timeout: 120
     events:
       - schedule:
