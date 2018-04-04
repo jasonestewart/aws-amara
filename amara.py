@@ -231,6 +231,8 @@ class AmaraUser(object):
         self.logger.debug("handle_jobs: current jobs: \n\t%s",
             "\n\t".join(map(str, self.get_current_jobs())))
 
+        # filter available jobs against existing jobs to remove any
+        # from teams that we are already working with (one job / team)
         jobs = list(filter(lambda j: curr_job_filter(j, self.get_current_jobs()),
                            self.available_jobs))
 
