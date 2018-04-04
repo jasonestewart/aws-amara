@@ -71,9 +71,10 @@ functions:
     handler: handler.check_jobs
     environment: # Function level environment variables
       DEBUG: FALSE
-      LOCAL: TRUE
-      PROFILE: TRUE
+      LOCAL: FALSE
+      PROFILE: FALSE
       LOGLEVEL: DEBUG
+      IGNORE_TEAMS: ondemand676|ondemand637|ondemand483|ondemand545|ondemand833|ondemand793
     timeout: 120
     events:
       - schedule:
