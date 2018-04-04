@@ -1,5 +1,6 @@
 import boto3
 import re
+import os
 from SESEmail import SESEmail
 from datetime import datetime
 from lxml import html
@@ -305,9 +306,8 @@ class AmaraUser(object):
     @staticmethod
     def fetch_ignore_teams():
         module_logger.debug("AmaraUser.fetch_ignore_teams: %s", 'start')
-        db_table = DB.Table("ignore_team")
-        response = db_table.scan()
-        teams = list(map(lambda r: r['team_name'], response["Items"]))
+        teams = os.getenv('IGNORE_TEAMS', "")
+        teams = teams.split("|")
         module_logger.debug("AmaraUser.fetch_ignore_teams:  found teams: %s", teams)
         return teams
 
