@@ -1,1 +1,1 @@
-# aws-amara - Code to help find amara tasks
+# aws-amara - Code to parse Amara OnDemand job order emails to claim tasks
