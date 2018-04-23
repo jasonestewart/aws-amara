@@ -56,7 +56,7 @@ package:
    - stats.txt
    - .flake8
    - README.md
-   - check-jobs.log
+   - amara-alert.log
    - debug/**
     
 plugins:
@@ -67,29 +67,17 @@ custom:
     dockerizePip: non-linux
 
 functions:
-  check_jobs:
-    handler: handler.check_jobs
+  amara_alert:
+    handler: handler.amara_alert
     environment: # Function level environment variables
       DEBUG: FALSE
-      LOCAL: TRUE
-      PROFILE: TRUE
-      LOGLEVEL: INFO
-    timeout: 120
+      LOGLEVEL: DEBUG
+    timeout: 10
     events:
       - schedule:
           rate: cron(*/5 * * * ? *)
       - enabled: true    
-  check_teams:
-    handler: handler.check_teams
-    environment: # Function level environment variables
-      DEBUG: FALSE
-      LOCAL: TRUE
-      PROFILE: TRUE
-      LOGLEVEL: DEBUG
-  init_amara_teams:
-    handler: handler.init_amara_teams
-  get_stored_pages:
-    handler: handler.get_stored_pages
+
 
 #    The following are a few example events you can configure
 #    NOTE: Please make sure to change your handler code to work with those events
