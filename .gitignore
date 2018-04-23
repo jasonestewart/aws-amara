@@ -19,4 +19,6 @@ var/
 # Serverless directories
 .serverless
 stats.txt
-check-jobs.log
+amara-alert.log
+*.bbprojectd/
+ses-event.json
