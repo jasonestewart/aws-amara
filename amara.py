@@ -4,6 +4,7 @@ from SESEmail import SESEmail
 from datetime import datetime, timedelta
 import logging
 import json
+from aiohttp import ClientSession, TCPConnector
 import asyncio
 # from IPython import embed
 
@@ -13,6 +14,33 @@ BASE_URL = "https://amara.org"
 
 module_logger = logging.getLogger('amara-handler.{}'.format(__name__))
 
+class Amara(object):
+    """Class for encapsulating Amara.org"""
+
+    @classmethod
+    def signup_for_job(cls, team_num):
+        module_logger.info("Amara.signup_for_job: %s", 'start')
+
+        loop = asyncio.get_event_loop()
+        future = asyncio.ensure_future(cls.run_job_checks(team_num))
+        loop.run_until_complete(future)
+
+        module_logger.info("Amara.signup_for_job: %s", 'end')
+
+    @classmethod
+    async def run_job_checks(cls, team_num):
+        module_logger.info("Amara.run_job_checks: %s", 'start')
+
+        # Create client session that will ensure we dont open new connection
+        # per each request.
+        async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
+            await AmaraUser.init(session)
+            user = AmaraUser()
+
+            await user.signup_for_job(team_num)
+
+        module_logger.info("Amara.run_job_checks: %s", 'end')
+        
 
 class AmaraTeam(object):
     """Class for encapsulating Teams on Amara.org"""
@@ -32,8 +60,6 @@ class AmaraTeam(object):
 
 class AmaraJob(object):
     """Class for encapsulating new jobs on Amara.org"""
-
-    DEBUG = False
 
     def __init__(self):
         self.logger = logging.getLogger("amara-handler.{}.AmaraJob".format(__name__))
@@ -126,8 +152,6 @@ class AmaraTranscriptionJob(AmaraJob):
 
 class AmaraUser(object):
     """Class for encapsulating Amara.org login"""
-
-    DEBUG = False
 
     API_URL        = BASE_URL + "/api"
     API_TEAMS_URL  = API_URL + "/teams/"

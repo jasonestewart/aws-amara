@@ -22,7 +22,7 @@ provider:
   runtime: python3.6
 
 # you can overwrite defaults here
-#  stage: dev
+stage: prod
 #  region: us-east-1
 
 # you can add statements to the Lambda function's IAM Role here
@@ -57,6 +57,7 @@ package:
    - .flake8
    - README.md
    - amara-alert.log
+   - ses-event.json
    - debug/**
     
 plugins:
@@ -70,12 +71,9 @@ functions:
   amara_alert:
     handler: handler.amara_alert
     environment: # Function level environment variables
-      DEBUG: FALSE
       LOGLEVEL: DEBUG
-    timeout: 10
+    timeout: 5
     events:
-      - schedule:
-          rate: cron(*/5 * * * ? *)
       - enabled: true    
 
 

@@ -1,24 +1,13 @@
-import json
-from aiohttp import ClientSession, TCPConnector
-import asyncio
 import os
 import re
-from datetime import datetime
-import io
-from amara import AmaraUser, AmaraJob
+from amara import Amara
 import logging
 # from IPython import embed
-
-DEBUG = ""
-VERBOSE = ""
-LOCAL = False
-PROFILE = False
 
 logger = None
 
 
-def get_amara_init_info():
-    global DEBUG
+def setup_logging():
     global logger
 
     logger = logging.getLogger('amara-handler')
@@ -40,20 +29,11 @@ def get_amara_init_info():
 
     logger.info("LOGLEVEL set to %s", loglevel)
 
-    debug = os.getenv('DEBUG', "FALSE")
-    if debug.upper() == "FALSE":
-        DEBUG = False
-        logger.info("DEBUG is false")
-    else:
-        logger.info("DEBUG is true")
-        DEBUG = True
 
-    AmaraUser.DEBUG = DEBUG
-    AmaraJob.DEBUG  = DEBUG
+def amara_alert(event, context):
+    setup_logging()
 
-
-async def run_job_checks(event):
-    logger.info("run_job_checks: start")
+    logger.info("amara_alert: start")
 
     assert(event['Records']
         and event['Records'][0]['eventVersion'] == '1.0'
@@ -61,36 +41,16 @@ async def run_job_checks(event):
 
     ses = event['Records'][0]['ses']
     subject = ses['mail']['commonHeaders']['subject']
-    
-    job_re = re.compile(r".*AMARA JOB REQUEST.*TEAM (\d\d\d)")
-    match = job_re.match(subject)
-    team_num = ''
+    logger.debug("amara_alert: found email subject: %s", subject)
+
+    match = re.match(r".*AMARA JOB REQUEST.*TEAM (\d\d\d)", subject)
     if not match:
-        logger.info("run_job_checks: non-amara email, end")
+        logger.info("amara_alert: non-amara job email, end")
         return False
-    else:
-        team_num = match.group(1)
 
-    # Create client session that will ensure we dont open new connection
-    # per each request.
-    async with ClientSession(connector=TCPConnector(verify_ssl=False)) as session:
-        await AmaraUser.init(session)
-        user = AmaraUser()
-        
-        await user.signup_for_job(team_num)
+    team_num = match.group(1)
+    logger.debug("amara_alert: found amara team: %s", team_num)
 
-    logger.info("run_job_checks: end")
+    Amara.signup_for_job(team_num)
 
-
-def amara_alert(event, context):
-    get_amara_init_info()
-
-    loop = asyncio.get_event_loop()
-    future = asyncio.ensure_future(run_job_checks(event))
-    loop.run_until_complete(future)
-
-    response = {
-        "statusCode": 200,
-        "body": "complete"
-    }
-    return response
+    logger.info("amara_alert: end")
