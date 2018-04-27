@@ -22,3 +22,5 @@ stats.txt
 amara-alert.log
 *.bbprojectd/
 ses-event.json
+s3-event.json
+debug

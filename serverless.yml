@@ -22,7 +22,7 @@ provider:
   runtime: python3.6
 
 # you can overwrite defaults here
-stage: prod
+#  stage: dev
 #  region: us-east-1
 
 # you can add statements to the Lambda function's IAM Role here
@@ -72,6 +72,9 @@ functions:
     handler: handler.amara_alert
     environment: # Function level environment variables
       LOGLEVEL: DEBUG
+      USER: ${file(../amara-cred.yml):user}
+      PASS: ${file(../amara-cred.yml):pass}
+      API_KEY: ${file(../amara-cred.yml):api_key}
     timeout: 5
     events:
       - enabled: true    

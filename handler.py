@@ -3,6 +3,12 @@ import re
 from amara import Amara
 import logging
 # from IPython import embed
+import boto3
+from email import policy
+from email.parser import BytesParser
+import lxml.html
+
+s3 = boto3.resource('s3')
 
 logger = None
 
@@ -36,14 +42,19 @@ def amara_alert(event, context):
     logger.info("amara_alert: start")
 
     assert(event['Records']
-        and event['Records'][0]['eventVersion'] == '1.0'
-        and event['Records'][0]["eventSource"]  == "aws:ses")
+        and event['Records'][0]['eventVersion'] == '2.0'
+        and event['Records'][0]["eventSource"]  == "aws:s3")
 
-    ses = event['Records'][0]['ses']
-    subject = ses['mail']['commonHeaders']['subject']
-    logger.debug("amara_alert: found email subject: %s", subject)
+    s3_rec = event['Records'][0]['s3']
+    bucket = s3_rec['bucket']['name']
+    key = s3_rec['object']['key']
+    logger.debug("amara_alert: found s3 bucket: %s, key: %s", bucket, key)
 
-    match = re.match(r".*AMARA JOB REQUEST.*TEAM (\d\d\d)", subject)
+    response = s3.Object(bucket, key).get()
+    email_bytes = response['Body'].read()
+    msg = BytesParser(policy=policy.default).parsebytes(email_bytes)
+    subject = msg['subject']
+    match = re.search(r"AMARA JOB REQUEST.*TEAM (\d\d\d)", subject)
     if not match:
         logger.info("amara_alert: non-amara job email, end")
         return False
@@ -51,6 +62,20 @@ def amara_alert(event, context):
     team_num = match.group(1)
     logger.debug("amara_alert: found amara team: %s", team_num)
 
-    Amara.signup_for_job(team_num)
+    html_body = msg.get_body(preferencelist=('html', 'plain')).get_content()
+
+    root = lxml.html.fromstring(html_body)
+    hrefs = root.xpath('//a/@href')
+    logger.debug("amara_alert: found links: %s", hrefs)
+
+    link = None
+    for h in hrefs:
+        if re.search(team_num + r".*assignments", h):
+            link = h
+            break
+
+    logger.debug("amara_alert: found link: %s", link)
+
+    Amara.signup_for_job(team_num, link)
 
     logger.info("amara_alert: end")
