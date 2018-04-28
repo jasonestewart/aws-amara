@@ -72,6 +72,8 @@ functions:
     handler: handler.amara_alert
     environment: # Function level environment variables
       LOGLEVEL: DEBUG
+      DEBUG: TRUE
+      LOCAL: FALSE
       USER: ${file(../amara-cred.yml):user}
       PASS: ${file(../amara-cred.yml):pass}
       API_KEY: ${file(../amara-cred.yml):api_key}
