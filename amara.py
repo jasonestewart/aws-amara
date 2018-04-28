@@ -21,17 +21,17 @@ class Amara(object):
     """Class for encapsulating Amara.org"""
 
     @classmethod
-    def signup_for_job(cls, team_num, link):
+    def signup_for_job(cls, team_name, link):
         module_logger.info("Amara.signup_for_job: %s", 'start')
 
         loop = asyncio.get_event_loop()
-        future = asyncio.ensure_future(cls.run_job_checks(team_num, link))
+        future = asyncio.ensure_future(cls.run_job_checks(team_name, link))
         loop.run_until_complete(future)
 
         module_logger.info("Amara.signup_for_job: %s", 'end')
 
     @classmethod
-    async def run_job_checks(cls, team_num, link):
+    async def run_job_checks(cls, team_name, link):
         module_logger.info("Amara.run_job_checks: %s", 'start')
 
         # Create client session that will ensure we dont open new connection
@@ -40,7 +40,7 @@ class Amara(object):
             await AmaraUser.init(session)
             user = AmaraUser()
 
-            await user.signup_for_job(team_num, link)
+            await user.signup_for_job(team_name, link)
 
         module_logger.info("Amara.run_job_checks: %s", 'end')
 
@@ -63,7 +63,11 @@ class AmaraTeam(object):
 
     @classmethod
     def get_team_name_from_link(cls, link):
-        return re.search(r"/en/teams/([-\w]+)/assignments/", link).group(1)
+        match = re.search(r"/en/teams/([-\w]+)/assignments/", link)
+        team_name = ''
+        if match:
+            team_name = match.group(1)
+        return team_name
 
 
 class AmaraJob(object):
@@ -322,6 +326,7 @@ class AmaraUser(object):
     """Class for encapsulating Amara.org login"""
 
     DEBUG = False
+    LOCAL = False
 
     LOGIN_URL      = BASE_URL + "/en/auth/login/?next=/"
     POST_LOGIN_URL = BASE_URL + "/en/auth/login_post/"
@@ -400,6 +405,23 @@ class AmaraUser(object):
     async def init(cls, session):
         module_logger.info("AmaraUser.init: %s", 'start')
 
+        debug = os.getenv('DEBUG', "FALSE")
+        if debug.upper() == "FALSE":
+            cls.DEBUG = False
+            module_logger.info("DEBUG is false")
+        else:
+            module_logger.info("DEBUG is true")
+            cls.DEBUG = True
+
+        local = os.getenv('LOCAL', "FALSE")
+        if local.upper() == "FALSE":
+            cls.LOCAL = False
+            module_logger.info("LOCAL is false")
+        else:
+            cls.LOCAL = True
+            module_logger.info("LOCAL is true")
+
+
         # I know this is weird but __new__ has to be called first
         user = AmaraUser()
         user.__session = session
@@ -459,15 +481,25 @@ class AmaraUser(object):
             "\n\t".join(map(str, self.current_jobs)))
         self.logger.info("fetch_current_jobs: %s", 'end')
 
-    async def find_all_team_jobs(self, link):
+    def save_page(self, team_name, doc):
+        DB = boto3.resource("dynamodb", region_name=AWS_REGION)
+        table = DB.Table('stored_pages')
+        id = str(datetime.utcnow()) + "::" + team_name
+        response = table.put_item(
+           Item={
+                'ID': id,
+                'page': doc,
+            }
+        )
+
+    async def find_all_team_jobs(self, team_name, link):
         self.logger.info("find_all_team_jobs: %s", 'start')
 
-        team_name = AmaraTeam.get_team_name_from_link(link)
         team = self.teams_by_name[team_name]
         self.logger.debug("find_all_team_jobs: found team: %s", team_name)
 
         root = None
-        if self.DEBUG:
+        if self.LOCAL and self.DEBUG:
             self.logger.info("find_all_team_jobs: %s", 'adding debug assignments')
             tree = None
             if team.name == 'ondemand808':
@@ -485,6 +517,8 @@ class AmaraUser(object):
             response = await self.__session.post(link, data=self.auth, headers=ref)
             doc = await response.text()
             root = html.fromstring(doc)
+            if self.DEBUG:
+                self.save_page(team_name, doc)
 
         jobs = root.xpath("//div[@class='videoCard']")
         self.logger.debug("find_all_team_jobs: found %i jobs", len(jobs))
@@ -524,16 +558,16 @@ class AmaraUser(object):
 
         self.logger.info("find_all_team_jobs: %s", 'end')
 
-    async def signup_for_job(self, team_num, link):
-        self.logger.info("signup_for_job: team: %s, start", team_num)
+    async def signup_for_job(self, team_name, link):
+        self.logger.info("signup_for_job: team: %s, start", team_name)
 
-        if team_num in self.current_jobs:
-            self.logger.info("signup_for_job: already have job for team: %s, end", team_num)
+        if team_name in self.current_jobs:
+            self.logger.info("signup_for_job: already have job for team: %s, end", team_name)
             return
 
-        await self.find_all_team_jobs(link)
+        await self.find_all_team_jobs(team_name, link)
         if self.available_jobs:
             job = sorted(self.available_jobs).pop()
             await job.handle(self.__session)
 
-        self.logger.info("signup_for_job: team: %s, end", team_num)
+        self.logger.info("signup_for_job: team: %s, end", team_name)
