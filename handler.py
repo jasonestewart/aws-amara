@@ -1,6 +1,6 @@
 import os
 import re
-from amara import Amara
+from amara import Amara, AmaraTeam
 import logging
 # from IPython import embed
 import boto3
@@ -69,13 +69,20 @@ def amara_alert(event, context):
     logger.debug("amara_alert: found links: %s", hrefs)
 
     link = None
+    team_name = ''
     for h in hrefs:
-        if re.search(team_num + r".*assignments", h):
+        team_name = AmaraTeam.get_team_name_from_link(h)
+        if team_name:
+            new_team_num = AmaraTeam.get_slug(team_name)
+            if not new_team_num == team_num:
+                logger.warn("amara_alert: expected team_num %s in link: %s", team_num, h)
             link = h
             break
 
-    logger.debug("amara_alert: found link: %s", link)
-
-    Amara.signup_for_job(team_num, link)
+    if link:
+        logger.debug("amara_alert: found link: %s, team_name: %s", link, team_name)
+        Amara.signup_for_job(team_name, link)
+    else:
+        logger.error("amara_alert: no link found")
 
     logger.info("amara_alert: end")
