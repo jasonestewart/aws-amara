@@ -117,12 +117,16 @@ class AmaraJob(object):
             self.url = BASE_URL + self.url
 
         user = AmaraUser()
-        ref = {'referer' : self.team.url}
-        async with session.post(self.url, data=user.auth, headers=ref) as response:
+        ref = {'referer' : self.referer}
+        self.logger.debug("handle: using referer: %s", self.referer)
+
+        async with session.post(self.url, headers=ref) as response:
             if response.status != 200:
                 text = await response.text()
                 self.logger.error("error while joining: %s, status: %s, headers: %s, text: %s",
                     self.url, response.status, response.headers, text)
+                for cookie in session.cookie_jar:
+                    self.logger.error("found cookie: %s", cookie)
             else:
                 self.send_email()
                 self.logger.info("handle: join success, adding job: %s", self.job_id)
@@ -368,16 +372,28 @@ class AmaraUser(object):
 
         async with self.__session.get(self.LOGIN_URL) as response:
             await response.read()
-            crsf = response.cookies.get('csrftoken').value
+            csrf = response.cookies.get('csrftoken').value
+            self.logger.debug("Found CSRF: %s", csrf)
         self.auth = {
-            'csrfmiddlewaretoken' : crsf,
+            'csrfmiddlewaretoken' : csrf,
             'username' : self.name,
             'password' : self.password,
         }
         ref = {'referer' : self.LOGIN_URL}
+        async with self.__session.post(self.POST_LOGIN_URL, data=self.auth, headers=ref) as response:
+            if response.status != 200:
+                self.logger.error("error while joining: %s, status: %s, headers: %s",
+                    self.POST_LOGIN_URL, response.status, response.headers)
+                raise
 
-        self.logger.info("auth_session: %s", 'end')
-        return await self.__session.post(self.POST_LOGIN_URL, data=self.auth, headers=ref)
+            await response.read()
+            if self.DEBUG:
+                for cookie in self.__session.cookie_jar:
+                    self.logger.debug("Found cookie: %s", cookie)
+                # self.auth['sessionid'] = response.cookies.get('sessionid').value
+
+            self.logger.info("auth_session: %s", 'end')
+            return response
 
     def fetch_all_teams_scrape(self, doc):
         self.logger.info("fetch_teams: %s", 'start')
@@ -461,7 +477,7 @@ class AmaraUser(object):
             href = curr_job[0].attrib['href']
             # matching /en/teams/ondemand212/ to get group name
             team_name = re.search(r"/([-\w]+)/$", href).group(1)
-            return self.teams[team_name]
+            return self.teams_by_name[team_name]
 
         self.current_jobs = []
         root = await self.fetch_dashboard_html()
@@ -474,8 +490,8 @@ class AmaraUser(object):
             # <div><h3></h3><ul>
             li = divs[0][1].findall(".//li")  # find all the current jobs
             for curr_job in li:
-                job = team_from_html(curr_job)
-                self.current_jobs.append(job)
+                team = team_from_html(curr_job)
+                self.current_jobs.append(team.name)
 
         self.logger.info("fetch_current_jobs: Found jobs: \n\t%s",
             "\n\t".join(map(str, self.current_jobs)))
@@ -513,12 +529,18 @@ class AmaraUser(object):
             root = tree.getroot()
         else:
             self.logger.info("find_all_team_jobs: fetching assignment for team: %s", team.name)
-            ref = {'referer' : team.url}
-            response = await self.__session.post(link, data=self.auth, headers=ref)
+            ref = {'referer' : self.LOGIN_URL}
+            #response = await self.__session.get(link, headers=ref)
+            response = await self.__session.get(link)
             doc = await response.text()
-            root = html.fromstring(doc)
-            if self.DEBUG:
-                self.save_page(team_name, doc)
+            if response.status != 200:
+                self.logger.error("error while joining: %s, status: %s, headers: %s, text: %s",
+                    link, response.status, response.headers, doc)
+                return
+            else:
+                root = html.fromstring(doc)
+                if self.DEBUG:
+                    self.save_page(team_name, doc)
 
         jobs = root.xpath("//div[@class='videoCard']")
         self.logger.debug("find_all_team_jobs: found %i jobs", len(jobs))
@@ -548,12 +570,13 @@ class AmaraUser(object):
             job_obj = None
             if type == 'subtitler':
                 job_obj = AmaraTranscriptionJob(team, id, time, url)
-            elif type == 'reviewer':
+            elif type == 'approver':
                 job_obj = AmaraReviewJob(team, id, time, url)
             else:
                 self.logger.error("find_all_team_jobs: bad type: %s", type)
                 return
 
+            job_obj.referer = link
             self.available_jobs.append(job_obj)
 
         self.logger.info("find_all_team_jobs: %s", 'end')
