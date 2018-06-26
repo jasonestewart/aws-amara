@@ -117,10 +117,10 @@ class AmaraJob(object):
             self.url = BASE_URL + self.url
 
         user = AmaraUser()
-        ref = {'referer' : self.referer}
-        self.logger.debug("handle: using referer: %s", self.referer)
+        ref = {'referer' : self.team.url}
+        self.logger.debug("handle: using referer: %s", ref)
 
-        async with session.post(self.url, headers=ref) as response:
+        async with session.get(self.url, headers=ref) as response:
             if response.status != 200:
                 text = await response.text()
                 self.logger.error("error while joining: %s, status: %s, headers: %s, text: %s",
@@ -128,17 +128,35 @@ class AmaraJob(object):
                 for cookie in session.cookie_jar:
                     self.logger.error("found cookie: %s", cookie)
             else:
-                self.send_email()
+                self.send_email("new job")
                 self.logger.info("handle: join success, adding job: %s", self.job_id)
 
         self.logger.info("handle: %s", 'end')
+
+    async def handle_api(self, session):
+        self.logger.info("handle_api: %s", 'start')
+
+        self.logger.debug("handle_api: self: %s", self)
+
+        user = AmaraUser()
+        api = AmaraAPI(session, user.api_key, user.name)
+        result = await api.api_call_put(api.API_JOIN_TEMPLATE.format(self.team.name, self.job_id),
+                                         {self.type: user.name})
+        try:
+            if result[self.type]['username'] == user.name:
+                self.logger.info("handle_api: join success, adding job: %s", self.job_id)
+                self.send_email()
+        except KeyError:
+            self.logger.exception("handle_api: bad result: %s", result)
+
+        self.logger.info("handle_api: %s", 'end')
 
 
 class AmaraReviewJob(AmaraJob):
     """Class for encapsulating new review jobs on Amara.org"""
 
     def __init__(self, team, job_id, time, url):
-        self.type = 'review'
+        self.type = 'approver'
         self.team = team
         self.job_id = job_id
         self.url = url
@@ -149,6 +167,9 @@ class AmaraReviewJob(AmaraJob):
         str = "<AmaraReviewJob: Team: {}, job_id: {}, URL: {},duration: {}>\n"
         return str.format(self.team, self.job_id, self.url, self.duration)
 
+    async def handle_api(self, session):
+        await super().handle_api(session)
+
     async def handle(self, session):
         await super().handle(session)
 
@@ -157,7 +178,7 @@ class AmaraTranscriptionJob(AmaraJob):
     """Class for encapsulating new transcription jobs on Amara.org"""
 
     def __init__(self, team, job_id, time, url):
-        self.type = 'transcription'
+        self.type = 'subtitler'
         self.team = team
         self.job_id = job_id
         self.url = url
@@ -167,6 +188,9 @@ class AmaraTranscriptionJob(AmaraJob):
     def __repr__(self):
         str = "<AmaraTranscriptionJob: Team: {}, job_id: {}, URL: {}, duration: {}>\n"
         return str.format(self.team, self.job_id, self.url, self.duration)
+
+    async def handle_api(self, session):
+        await super().handle_api(session)
 
     async def handle(self, session):
         await super().handle(session)
@@ -185,11 +209,10 @@ class AmaraAPI(object):
     API_VIDEOS_TEMPLATE       = API_VIDEOS_URL + "{}/"
     API_JOIN_TEMPLATE         = API_TEAM_JOB_URL_TEMPLATE + "{}/"
 
-    def __init_(self, session, api_key, name):
+    def __init__(self, session, api_key, name):
         self.logger = logging.getLogger("amara-handler.{}.AmaraAPI".format(__name__))
         self.api_headers = {'X-api-key'      : api_key,
-                            'X-api-username' : name,
-        }
+                            'X-api-username' : name}
         self.__session = session
         self.teams_list = []
         self.available_jobs = []
@@ -283,22 +306,6 @@ class AmaraAPI(object):
                         new_job.duration = video['duration']
                         new_job.video = job['video']
                         self.available_jobs.append(new_job)
-
-    async def handle(self, type):
-        self.logger.info("handle: %s", 'start')
-
-        self.logger.debug("handle: self: %s", self)
-
-        user = AmaraUser()
-        result = await user.api_call_put(user.API_JOIN_TEMPLATE.format(self.team.name, self.job_id),
-                                         {type: user.name})
-        try:
-            if result[type]['username'] == user.name:
-                self.send_email("successfully joined new job")
-        except KeyError:
-            self.logger.exception("handle: bad result: %s", result)
-
-        self.logger.info("handle: %s", 'end')
 
     async def api_call_put(self, url, json_data):
         self.logger.info("api_call_put: start, url: %s, data: %s", url, json_data)
@@ -511,6 +518,7 @@ class AmaraUser(object):
     async def find_all_team_jobs(self, team_name, link):
         self.logger.info("find_all_team_jobs: %s", 'start')
 
+        self.available_jobs = []
         team = self.teams_by_name[team_name]
         self.logger.debug("find_all_team_jobs: found team: %s", team_name)
 
@@ -529,8 +537,6 @@ class AmaraUser(object):
             root = tree.getroot()
         else:
             self.logger.info("find_all_team_jobs: fetching assignment for team: %s", team.name)
-            ref = {'referer' : self.LOGIN_URL}
-            #response = await self.__session.get(link, headers=ref)
             response = await self.__session.get(link)
             doc = await response.text()
             if response.status != 200:
@@ -548,12 +554,13 @@ class AmaraUser(object):
         for job in jobs:
             xpath_str = ".//span[@class='videoCard-duration']"
             time_span = job.xpath(xpath_str)
+            time = 0
             if not len(time_span) > 0:
-                self.logger.error("find_all_team_jobs: xpath: %s failed to find time", xpath_str)
-                return
-            time_str = time_span[0].text
-            m, s = time_str.split(':')
-            time = int(s) + int(m)*60
+                self.logger.error("find_all_team_jobs: failed to find time for job: %s", job)
+            else:
+                time_str = time_span[0].text
+                m, s = time_str.split(':')
+                time = int(s) + int(m)*60
 
             xpath_str = ".//a[@class='button cta']"
             a = job.xpath(xpath_str)
@@ -590,6 +597,7 @@ class AmaraUser(object):
 
         await self.find_all_team_jobs(team_name, link)
         if self.available_jobs:
+            self.logger.info("signup_for_job: found %i available jobs", len(self.available_jobs))
             job = sorted(self.available_jobs).pop()
             await job.handle(self.__session)
 
