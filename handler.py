@@ -54,7 +54,7 @@ def amara_alert(event, context):
     email_bytes = response['Body'].read()
     msg = BytesParser(policy=policy.default).parsebytes(email_bytes)
     subject = msg['subject']
-    match = re.search(r"AMARA JOB REQUEST.*TEAM (\d\d\d)", subject)
+    match = re.search(r"AMARA JOB.*TEAM (\d\d\d)", subject)
     if not match:
         logger.info("amara_alert: non-amara job email, end")
         return False
